@@ -6,6 +6,7 @@ Scrapes moderation logs and publishes them to a subreddit wiki page
 import argparse
 import json
 import logging
+import re
 import sqlite3
 import sys
 import time
@@ -108,7 +109,8 @@ class ModlogWikiPublisher:
         'edit_saved_response', 'edited_widget', 'editrule', 'editsettings',
         'ignorereports', 'lock', 'marknsfw', 'reorderrules', 'setflair', 'spoiler',
         'sticky', 'unlock', 'unmarknsfw', 'unspoiler', 'unsticky', 'wikirevise',
-        'wikipermlevel', 'wikipagelisted', 'wikipageunlisted', 'createrule','editflair'
+        'wikipermlevel', 'wikipagelisted', 'wikipageunlisted', 'createrule','editflair','invitemoderator'
+        'acceptmoderatorinvite', 'removemoderator', 'rejectmoderatorinvite',
     }
 
     def __init__(self, config_path: str = "config.json"):
@@ -377,6 +379,7 @@ class ModlogWikiPublisher:
                 result['url']
             )
         else:
+            logger.info("Non-removal action, skipping modmail URL generation")
             result['modmail_url'] = ''
         # Remove Pipes from Result Values
         for key in result:
@@ -421,7 +424,6 @@ class ModlogWikiPublisher:
             title = f"{entry['title']}"
 
         # Format removal reason
-        print(f"Processing removal reason: {entry['removal_reason']}")
         reason = entry['removal_reason'] or entry['note'] or '-'
         # Format inquire link
         if entry['modmail_url']:
@@ -432,6 +434,46 @@ class ModlogWikiPublisher:
         # Format time
         time_str = self._format_timestamp(entry['timestamp'])
         return f"| {time_str} | {action} | {moderator} | {title} | {reason} | {inquire} |"
+
+    def _parse_existing_wiki(self, content: str) -> List[Dict]:
+        """Parse existing wiki table into modlog entry dicts"""
+        rows = re.findall(
+            r'^\| (.+?) \| (.+?) \| (.+?) \| \[(.+?)\]\((https://[^\)]+)\) \| (.+?) \| (?:\[(.+?)\]\((https://[^\)]+)\)|-) \|$',
+            content, re.MULTILINE
+        )
+        entries = []
+        for row in rows:
+            time_str, action_type, moderator, title, url, reason, _, modmail_url = row
+            try:
+                # Reconstruct an ID from URL + action_type + timestamp
+                timestamp = self._parse_time_str(time_str)
+                action_id = f"{url.split('/')[-1]}_{int(timestamp)}"
+
+                entries.append({
+                    'id': action_id,
+                    'timestamp': timestamp,
+                    'action_type': action_type,
+                    'moderator': moderator,
+                    'title': title,
+                    'url': url,
+                    'removal_reason': reason,
+                    'note': '',
+                    'modmail_url': modmail_url
+                })
+            except Exception as e:
+                logger.debug(f"Failed to parse row: {row} ({e})")
+                continue
+        return entries
+
+    def _parse_time_str(self, timestr: str) -> float:
+        """Parse HH:MM:SS UTC into epoch (roughly today)"""
+        try:
+            now = datetime.now(timezone.utc)
+            t = datetime.strptime(timestr, "%H:%M:%S UTC").time()
+            dt = datetime.combine(now.date(), t, tzinfo=timezone.utc)
+            return dt.timestamp()
+        except:
+            return 0
 
     def generate_wiki_content(self, entries: List[Dict]) -> str:
         """Generate wiki page content from entries"""
@@ -500,24 +542,51 @@ class ModlogWikiPublisher:
 
         return content
 
-    def update_wiki(self, content: str) -> bool:
-        """Update the wiki page with new content"""
+    def update_wiki(self, new_entries: List[Dict]) -> bool:
+        """Merge with existing wiki content and update"""
         try:
             subreddit = self.reddit.subreddit(self.config['target_subreddit'])
             wiki_page = self.config.get('wiki_page', 'modlog')
 
-            # Update wiki page
+            # Get current wiki content
+            try:
+                existing_content = subreddit.wiki[wiki_page].content_md
+            except Exception:
+                existing_content = ""
+
+            # Parse existing entries
+            existing_entries = self._parse_existing_wiki(existing_content)
+
+            # Merge and dedupe
+            all_entries = {e['id']: e for e in existing_entries}
+            for entry in new_entries:
+                all_entries[entry['id']] = entry
+
+            # Apply retention policy
+            cutoff = time.time() - self.config.get('retention_days', 30) * 86400
+            retained = [
+                e for e in all_entries.values()
+                if e['timestamp'] >= cutoff
+            ]
+
+            # Sort newest first
+            retained.sort(key=lambda x: x['timestamp'], reverse=True)
+
+            # Render content
+            content = self.generate_wiki_content(retained)
+
+            # Update the wiki
             subreddit.wiki[wiki_page].edit(
                 content=content,
-                reason="Automated modlog update"
+                reason="Rolling modlog update with retention"
             )
-
-            logger.info(f"Successfully updated wiki page: /r/{self.config['target_subreddit']}/wiki/{wiki_page}")
+            logger.info(f"Wiki page updated with {len(retained)} entries.")
             return True
 
         except Exception as e:
-            logger.error(f"Error updating wiki: {e}")
+            logger.error(f"Failed to update wiki: {e}")
             return False
+
 
     def run_once(self):
         """Run a single update cycle"""
@@ -531,12 +600,8 @@ class ModlogWikiPublisher:
 
         if entries:
             logger.info(f"Processing {len(entries)} new modlog entries")
-
             # Generate wiki content
-            content = self.generate_wiki_content(entries)
-
-            # Update wiki
-            self.update_wiki(content)
+            self.update_wiki(entries)
         else:
             logger.info("No new modlog entries to process")
 
