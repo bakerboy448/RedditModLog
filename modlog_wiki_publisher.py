@@ -7,13 +7,12 @@ import argparse
 import json
 import logging
 import logging.handlers
-import re
 import sqlite3
 import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional
 from urllib.parse import quote
 
 import praw
