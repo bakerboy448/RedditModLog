@@ -133,77 +133,56 @@ class ModlogWikiPublisher:
     def _init_reddit(self) -> praw.Reddit:
         """Initialize Reddit API connection"""
         reddit_config = self.config['reddit']
-        return praw.Reddit(
-            client_id=reddit_config['client_id'],
-            client_secret=reddit_config['client_secret'],
-            username=reddit_config['username'],
-            password=reddit_config['password'],
-            user_agent=f"ModlogWikiPublisher/1.0 by /u/{reddit_config['username']}"
-        )
     
-    def test_connection(self) -> bool:
-        """Test Reddit connection and permissions"""
-        print("\n" + "="*50)
-        print("Testing Reddit API Connection")
-        print("="*50)
-        
+        # Add debug logging
+        logger.debug(f"Attempting login with username: {reddit_config['username']}")
+        logger.debug(f"Client ID: {reddit_config['client_id'][:4]}...")  # Show first 4 chars
+    
         try:
-            # Test authentication
-            me = self.reddit.user.me()
-            print(f"✓ Authenticated as: /u/{me.name}")
-            
-            # Test subreddit access
-            source_sub = self.reddit.subreddit(self.config['source_subreddit'])
-            _ = source_sub.created_utc
-            print(f"✓ Source subreddit exists: /r/{self.config['source_subreddit']}")
-            
-            # Check moderator status
-            is_mod = False
-            try:
-                for mod in source_sub.moderator():
-                    if mod.name.lower() == self.config['reddit']['username'].lower():
-                        is_mod = True
-                        break
-            except:
-                pass
-            
-            if is_mod:
-                print(f"✓ User is moderator of /r/{self.config['source_subreddit']}")
-            else:
-                print(f"⚠ User is NOT moderator of /r/{self.config['source_subreddit']}")
-                print("  You need moderator access to read modlogs")
-                return False
-            
-            # Test modlog access
-            try:
-                log_entry = next(source_sub.mod.log(limit=1), None)
-                if log_entry:
-                    print(f"✓ Can read modlog (latest action: {log_entry.action})")
-                else:
-                    print("⚠ No modlog entries found (might be empty)")
-            except Exception as e:
-                print(f"❌ Cannot read modlog: {e}")
-                return False
-            
-            # Test wiki access
-            target_sub = self.reddit.subreddit(self.config['target_subreddit'])
-            wiki_page = self.config['wiki_page']
-            
-            try:
-                page = target_sub.wiki[wiki_page]
-                content = page.content_md
-                print(f"✓ Wiki page exists: /r/{self.config['target_subreddit']}/wiki/{wiki_page}")
-                print(f"  Current size: {len(content)} characters")
-            except:
-                print(f"⚠ Wiki page doesn't exist yet: /r/{self.config['target_subreddit']}/wiki/{wiki_page}")
-                print("  It will be created on first run")
-            
-            print("\n✓ All tests passed!")
-            return True
-            
+            reddit = praw.Reddit(
+                client_id=reddit_config['client_id'],
+                client_secret=reddit_config['client_secret'],
+                username=reddit_config['username'],
+                password=reddit_config['password'],
+                user_agent=f"ModlogWikiPublisher/1.0 by /u/{reddit_config['username']}"
+            )
+        
+            # Force authentication test
+            me = reddit.user.me()
+            logger.info(f"Successfully authenticated as: {me.name}")
+            return reddit
+        
         except Exception as e:
-            print(f"❌ Connection test failed: {e}")
-            return False
+            logger.error(f"Authentication failed: {e}")
+            logger.error(f"Error type: {type(e).__name__}")
+            if hasattr(e, 'response'):
+                logger.error(f"Response status: {e.response.status_code}")
+                logger.error(f"Response body: {e.response.text}")
+            raise
+    
+        def test_connection(self) -> bool:
+            """Test Reddit connection and permissions"""
+            print("\n" + "="*50)
+            print("Testing Reddit API Connection")
+            print("="*50)
+    
+            try:
+                # Test authentication with detailed error catching
+                try:
+                    me = self.reddit.user.me()
+                    print(f"✓ Authenticated as: /u/{me.name}")
+                except Exception as auth_error:
+                    print(f"❌ Authentication failed: {auth_error}")
+                    if hasattr(auth_error, 'response'):
+                        print(f"   Status Code: {auth_error.response.status_code}")
+                        print(f"   Response: {auth_error.response.text}")
+                    if '401' in str(auth_error):
+                        print("\nCommon 401 causes:")
+                        print("  - Incorrect client_id or client_secret")
+                        print("  - Wrong username or password")
+                        print("  - 2FA enabled (need app-specific password)")
+                        print("  - Spaces/quotes in credentials")
+                    return False
     
     def _format_timestamp(self, timestamp: float) -> str:
         """Format timestamp as HH:MM:SS UTC"""
