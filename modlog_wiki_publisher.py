@@ -97,7 +97,7 @@ class ModlogWikiPublisher:
     # Actions that result in content removal
     REMOVAL_ACTIONS = {
         'removelink', 'removecomment', 'spamlink', 'spamcomment',
-        'removepost', 'removecontent'
+        'removepost', 'removecontent','addremovalreason'
     }
 
     # Actions to ignore
@@ -108,7 +108,7 @@ class ModlogWikiPublisher:
         'edit_saved_response', 'edited_widget', 'editrule', 'editsettings',
         'ignorereports', 'lock', 'marknsfw', 'reorderrules', 'setflair', 'spoiler',
         'sticky', 'unlock', 'unmarknsfw', 'unspoiler', 'unsticky', 'wikirevise',
-        'wikipermlevel', 'wikipagelisted', 'wikipageunlisted', 'createrule'
+        'wikipermlevel', 'wikipagelisted', 'wikipageunlisted', 'createrule','editflair'
     }
 
     def __init__(self, config_path: str = "config.json"):
@@ -304,7 +304,7 @@ class ModlogWikiPublisher:
         if self.db.is_processed(action_id):
             return None
         if action_type not in self.REMOVAL_ACTIONS:
-            logger.info(f'Processing non-removal action: [{action_type}] for entry {entry.id} by {entry.mod.name}')
+            logger.info(f'==== Processing non-removal action: [{action_type}] for entry {entry.id} by {entry.mod.name}')
             logger.info(f"Entry details: {entry.details}")
             logger.info(f"Entry target author: {entry.target_author}")
             logger.info(f"Entry target title: {entry.target_title}")
@@ -332,7 +332,7 @@ class ModlogWikiPublisher:
         if entry.details:
             entry.p_details = entry.details.strip()
             if action_type in ['addremovalreason']:
-                entry.p_details = entry.parsed_mod_note
+                entry.p_details = entry.parsed_mod_note.strip()
         else:
             entry.p_details = ''
         # Extract details
@@ -378,7 +378,10 @@ class ModlogWikiPublisher:
             )
         else:
             result['modmail_url'] = ''
-
+        # Remove Pipes from Result Values
+        for key in result:
+            if isinstance(result[key], str):
+                result[key] = result[key].replace('|', ' ')
         return result
 
     def fetch_modlog_entries(self, limit: int = 100) -> List[Dict]:
@@ -418,8 +421,8 @@ class ModlogWikiPublisher:
             title = f"{entry['title']}"
 
         # Format removal reason
+        print(f"Processing removal reason: {entry['removal_reason']}")
         reason = entry['removal_reason'] or entry['note'] or '-'
-
         # Format inquire link
         if entry['modmail_url']:
             inquire = f"[Contact Mods]({entry['modmail_url']})"
@@ -428,7 +431,9 @@ class ModlogWikiPublisher:
 
         # Format time
         time_str = self._format_timestamp(entry['timestamp'])
-
+        if action  == 'addremovalreason':
+            print("Logging addremovalreason action")
+            print(f"| {time_str} | {action} | {moderator} | {title} | {reason} | {inquire} |")
         return f"| {time_str} | {action} | {moderator} | {title} | {reason} | {inquire} |"
 
     def generate_wiki_content(self, entries: List[Dict]) -> str:
