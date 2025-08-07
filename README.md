@@ -4,42 +4,49 @@ Automatically publishes Reddit moderation logs to a subreddit wiki page with mod
 
 ## Features
 
-- 📊 Publishes modlogs as organized markdown tables
-- 📧 Pre-populated modmail links for removal inquiries
-- 🗄️ SQLite database for efficient deduplication
-- ⏰ Configurable update intervals
-- 🔒 Automatic cleanup of old entries
-- ⚡ Handles Reddit's 524KB wiki size limit
+* 📊 Publishes modlogs as organized markdown tables
+* 📧 Pre-populated modmail links for removal inquiries
+* 🗄️ SQLite database for deduplication and retention
+* ⏰ Configurable update intervals
+* 🔒 Automatic cleanup of old entries
+* ⚡ Handles Reddit's 524KB wiki size limit
+* 🧩 Fully CLI-configurable (no need to edit `config.json`)
+* 📁 Per-subreddit log files for debugging
 
 ## Quick Start
 
 1. **Install dependencies**
+
 ```bash
 pip install praw
 ```
 
 2. **Create Reddit App**
-   - Go to https://www.reddit.com/prefs/apps
-   - Click "Create App" → Select "script"
-   - Note your `client_id` and `client_secret`
 
-3. **Configure**
+   * Visit: [https://www.reddit.com/prefs/apps](https://www.reddit.com/prefs/apps)
+   * Click "Create App" → Choose "script"
+   * Note `client_id` and `client_secret`
+
+3. **Copy and edit config**
+
 ```bash
 cp config.template.json config.json
-# Edit config.json with your credentials
+# Edit your credentials and subreddit info
 ```
 
 4. **Test connection**
+
 ```bash
 python modlog_wiki_publisher.py --test
 ```
 
 5. **Run**
+
 ```bash
-# Default: Run once and exit
+# Run once and exit
 python modlog_wiki_publisher.py
 
-# Continuous mode (daemon)
+# Run continuously
 python modlog_wiki_publisher.py --continuous
 ```
 
@@ -56,7 +63,6 @@ Create `config.json`:
     "password": "YOUR_BOT_PASSWORD"
   },
   "source_subreddit": "YourSubreddit",
-  "target_subreddit": "YourSubreddit",
   "wiki_page": "modlog",
   "ignored_moderators": ["AutoModerator"],
   "update_interval": 300,
@@ -65,29 +71,41 @@ Create `config.json`:
 }
 ```
 
-### Options
+### Configurable via CLI
 
-| Option | Description | Default |
-|--------|-------------|---------|
-| `source_subreddit` | Subreddit to read modlogs from | Required |
-| `target_subreddit` | Subreddit to publish wiki to | Required |
-| `wiki_page` | Wiki page name | `modlog` |
-| `ignored_moderators` | Moderators to ignore | `["AutoModerator"]` |
-| `update_interval` | Seconds between updates (continuous mode) | `300` |
-| `batch_size` | Modlog entries per fetch | `100` |
-| `retention_days` | Days to track processed entries | `30` |
+| CLI Option           | JSON Key           | Description                            | Default       |
+| -------------------- | ------------------ | -------------------------------------- | ------------- |
+| `--source-subreddit` | `source_subreddit` | Subreddit to read and write logs       | required      |
+| `--wiki-page`        | `wiki_page`        | Wiki page name                         | `modlog`      |
+| `--retention-days`   | `retention_days`   | Keep entries this many days            | `30`          |
+| `--batch-size`       | `batch_size`       | Entries to fetch per run               | `100`         |
+| `--interval`         | `update_interval`  | Seconds between updates in daemon mode | `300`         |
+| `--config`           | –                  | Path to config file                    | `config.json` |
+
+CLI values override config file values.
 
 ## Wiki Output
 
-The script creates tables organized by date:
+Sample wiki table output:
 
 ```markdown
 ## 2025-01-15
 
-| Time | Action | Content | Reason | Inquire |
-|------|--------|---------|--------|---------|
-| 14:25:33 UTC | removepost by **ModName** | [Post Title](url) by u/user | spam | [Contact Mods](modmail) |
+| Time | Action | Moderator | Content | Reason | Inquire |
+|------|--------|-----------|---------|--------|---------|
+| 14:25:33 UTC | removepost | ModName | [Post Title](url) | spam | [Contact Mods](modmail_url) |
 ```
+
+## Logging
+
+Each subreddit gets its own log file under `logs/`:
+
+```
+logs/
+└── yoursubreddit.log
+```
+
+Use `--debug` to enable verbose output.
 
 ## Command Line Options
 
@@ -95,27 +113,30 @@ The script creates tables organized by date:
 python modlog_wiki_publisher.py [options]
 
 Options:
-  --config FILE      Config file path (default: config.json)
-  --continuous       Run continuously (default: run once)
-  --test            Test configuration and exit
-  --debug           Enable debug logging
+  --config FILE            Path to config file (default: config.json)
+  --source-subreddit NAME  Subreddit to read from and publish to
+  --wiki-page NAME         Wiki page to update (default: modlog)
+  --retention-days N       Days to keep processed entries
+  --batch-size N           Number of modlog entries to fetch
+  --interval N             Seconds between updates (daemon)
+  --debug                  Enable debug logging
+  --test                   Run a test and exit
+  --continuous             Run continuously
 ```
 
-## Requirements
+## Database
 
-- Python 3.6+
-- PRAW (Reddit API wrapper)
-- Moderator access to source subreddit
-- Wiki edit permissions on target subreddit
-
-## Systemd Service (Optional)
-
-For continuous operation on Linux:
+Uses `modlog.db` (SQLite) for deduplication and history:
 
 ```bash
-# Create service file
-sudo nano /etc/systemd/system/modlog-wiki.service
+# View recent actions
+sqlite3 modlog.db "SELECT * FROM processed_actions ORDER BY created_at DESC LIMIT 10;"
+
+# Clean manually
+sqlite3 modlog.db "DELETE FROM processed_actions WHERE created_at < date('now', '-30 days');"
 ```
+
+## Systemd Service (Optional)
 
 ```ini
 [Unit]
@@ -124,9 +145,9 @@ After=network.target
 
 [Service]
 Type=simple
-User=YOUR_USERNAME
-WorkingDirectory=/path/to/script
-ExecStart=/usr/bin/python3 /path/to/modlog_wiki_publisher.py --continuous
+User=YOUR_USER
+WorkingDirectory=/opt/RedditModLog
+ExecStart=/usr/bin/python3 modlog_wiki_publisher.py --source-subreddit yoursubreddit --continuous
 Restart=always
 
 [Install]
@@ -134,7 +155,6 @@ WantedBy=multi-user.target
 ```
 
 ```bash
-# Enable and start
 sudo systemctl enable modlog-wiki
 sudo systemctl start modlog-wiki
 ```
@@ -142,53 +162,29 @@ sudo systemctl start modlog-wiki
 ## Permissions Required
 
 Your bot account needs:
-- **Moderator access** to read modlogs
-- **Wiki permissions** to edit wiki pages
 
-Add your bot as a moderator with "Wiki" permissions, or add to wiki contributors at:
-`/r/YourSubreddit/wiki/settings/modlog`
+* **Moderator** on the subreddit
+* **Wiki edit permissions**
 
-## Database
+Add the bot as a moderator or approved wiki contributor:
 
-The script uses SQLite (`modlog.db`) to track processed entries:
-
-```bash
-# View recent entries
-sqlite3 modlog.db "SELECT * FROM processed_actions ORDER BY created_at DESC LIMIT 10;"
-
-# Check database size
-ls -lh modlog.db
-
-# Manual cleanup (if needed)
-sqlite3 modlog.db "DELETE FROM processed_actions WHERE created_at < date('now', '-30 days');"
+```
+/r/<yoursubreddit>/wiki/settings/modlog
 ```
 
 ## Troubleshooting
 
-**Authentication Failed**
-- Verify credentials in config.json
-- Use app-specific password if 2FA is enabled
-
-**Wiki Permission Denied**
-- Ensure bot has moderator or wiki contributor access
-- Check wiki page permissions
-
-**Rate Limiting**
-- Increase `update_interval` (300+ seconds recommended)
-- Reduce `batch_size` if needed
-
-**Database Growing**
-- Reduce `retention_days` in config
-- Database auto-vacuums daily
+| Issue         | Fix                                              |
+| ------------- | ------------------------------------------------ |
+| Auth failed   | Check credentials, 2FA, use app password         |
+| Wiki denied   | Bot needs wiki mod or contributor access         |
+| Rate limiting | Increase `--interval` and reduce `--batch-size`  |
+| Growing DB    | Lower `--retention-days` or run cleanup manually |
 
 ## License
 
-GNU General Public License v3.0
+MIT or GPLv3 (pick based on your repo)
 
 ## Contributing
 
-Pull requests welcome! Please test changes thoroughly before submitting.
-
-## Support
-
-For issues or questions, create an issue on GitHub.
+PRs welcome. Include test runs and changes to CLI/help output.
