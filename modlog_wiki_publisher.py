@@ -610,7 +610,7 @@ class ModlogWikiPublisher:
 
             # Only use DB entries; wiki parsing no longer needed
             cutoff = time.time() - self.config.get('retention_days', 30) * 86400
-            retained = self.db.get_recent_entries(cutoff)
+            retained = self.db.get_recent_entries(cutoff, subreddit=self.config['source_subreddit'])
 
             # Sort newest first
             retained.sort(key=lambda x: x['timestamp'], reverse=True)
