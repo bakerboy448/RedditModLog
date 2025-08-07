@@ -116,11 +116,11 @@ class ModlogDatabase:
         ))
         self.conn.commit()
 
-
     def get_recent_entries(self, cutoff_timestamp: float, subreddit: Optional[str] = None) -> List[Dict]:
         """Return all modlog entries newer than the cutoff, optionally filtered by subreddit"""
         query = '''
-            SELECT action_id, timestamp, action_type, moderator, target_author,title, url, removal_reason, note, modmail_url
+            SELECT action_id, timestamp, action_type, moderator, target_author,
+                   title, url, removal_reason, note, modmail_url
             FROM modlog_entries
             WHERE timestamp >= ?
         '''
@@ -130,6 +130,8 @@ class ModlogDatabase:
             query += ' AND subreddit = ?'
             params.append(subreddit)
 
+        query += ' ORDER BY timestamp DESC'
+
         cursor = self.conn.execute(query, params)
         rows = cursor.fetchall()
         return [
@@ -138,9 +140,7 @@ class ModlogDatabase:
                 'target_author': r[4], 'title': r[5], 'url': r[6],
                 'removal_reason': r[7], 'note': r[8], 'modmail_url': r[9]
             } for r in rows
-    ]
-
-
+        ]
 
     def is_processed(self, action_id: str) -> bool:
         """Check if an action has been processed"""
@@ -167,9 +167,12 @@ class ModlogDatabase:
         cutoff_date = datetime.now() - timedelta(days=self.retention_days)
         self.conn.execute(
             "DELETE FROM processed_actions WHERE created_at < ?",
-        (cutoff_date.isoformat(),)
+            (cutoff_date.isoformat(),)
         )
-
+        self.conn.execute(
+            "DELETE FROM modlog_entries WHERE timestamp < ?",
+            (cutoff_date.timestamp(),)
+        )
         self.conn.commit()
         # Vacuum occasionally to reclaim space
         if time.time() % 86400 < 300:  # Once per day approximately
@@ -187,7 +190,7 @@ class ModlogWikiPublisher:
     # Actions that result in content removal
     REMOVAL_ACTIONS = {
         'removelink', 'removecomment', 'spamlink', 'spamcomment',
-        'removepost', 'removecontent','addremovalreason'
+        'removepost', 'removecontent', 'addremovalreason'
     }
 
     # Actions to ignore
@@ -198,18 +201,25 @@ class ModlogWikiPublisher:
         'edit_saved_response', 'edited_widget', 'editrule', 'editsettings',
         'ignorereports', 'lock', 'marknsfw', 'reorderrules', 'setflair', 'spoiler',
         'sticky', 'unlock', 'unmarknsfw', 'unspoiler', 'unsticky', 'wikirevise',
-        'wikipermlevel', 'wikipagelisted', 'wikipageunlisted', 'createrule','editflair','invitemoderator',
-        'acceptmoderatorinvite', 'removemoderator', 'rejectmoderatorinvite','unbanuser', 'setsuggestedsort',
-        'muteuser', 'submit_scheduled_post'
+        'wikipermlevel', 'wikipagelisted', 'wikipageunlisted', 'createrule', 'editflair',
+        'invitemoderator', 'acceptmoderatorinvite', 'removemoderator', 'rejectmoderatorinvite',
+        'unbanuser', 'setsuggestedsort', 'muteuser', 'submit_scheduled_post'
+    }
+
+    # Action groupings for statistics
+    ACTION_GROUPS = {
+        'spam': ['spamlink', 'spamcomment'],
+        'remove': ['removelink', 'removecomment', 'removepost', 'removecontent'],
+        'reason': ['addremovalreason'],
     }
 
     def __init__(self, config_path: str = "config.json", cli_args: Optional[argparse.Namespace] = None):
         self.config = self._load_config(config_path, cli_args or argparse.Namespace())
+        self._validate_config(self.config)
         self.reddit = self._init_reddit()
         self.db = ModlogDatabase(retention_days=self.config.get('retention_days', 30))
         self.wiki_char_limit = 524288
         self.batch_size = self.config.get('batch_size', 100)
-
 
     def _load_config(self, config_path: str, cli_args: argparse.Namespace) -> dict:
         """Load JSON config, then override with CLI args"""
@@ -222,21 +232,41 @@ class ModlogWikiPublisher:
         except json.JSONDecodeError as e:
             logger.error(f"Invalid JSON in config: {e}")
             sys.exit(1)
+        
         # CLI overrides
-        if cli_args.source_subreddit:
+        if hasattr(cli_args, 'source_subreddit') and cli_args.source_subreddit:
             config['source_subreddit'] = cli_args.source_subreddit
-        if cli_args.wiki_page:
+        if hasattr(cli_args, 'wiki_page') and cli_args.wiki_page:
             config['wiki_page'] = cli_args.wiki_page
-        if cli_args.retention_days is not None:
+        if hasattr(cli_args, 'retention_days') and cli_args.retention_days is not None:
             config['retention_days'] = cli_args.retention_days
-        if cli_args.batch_size is not None:
+        if hasattr(cli_args, 'batch_size') and cli_args.batch_size is not None:
             config['batch_size'] = cli_args.batch_size
-        if cli_args.interval is not None:
+        if hasattr(cli_args, 'interval') and cli_args.interval is not None:
             config['update_interval'] = cli_args.interval
         if 'target_subreddit' not in config:
             config['target_subreddit'] = config.get('source_subreddit')
         return config
 
+    def _validate_config(self, config: dict) -> None:
+        """Validate configuration has required fields"""
+        required = ['reddit', 'source_subreddit']
+        reddit_required = ['client_id', 'client_secret', 'username', 'password']
+        
+        for field in required:
+            if field not in config:
+                raise ValueError(f"Missing required config field: {field}")
+        
+        if 'reddit' in config:
+            for field in reddit_required:
+                if field not in config['reddit']:
+                    raise ValueError(f"Missing required reddit config: {field}")
+        
+        # Validate retention_days is reasonable
+        retention = config.get('retention_days', 30)
+        if not 1 <= retention <= 365:
+            logger.warning(f"Unusual retention_days: {retention}, using 30")
+            config['retention_days'] = 30
 
     def _init_reddit(self) -> praw.Reddit:
         """Initialize Reddit API connection"""
@@ -255,7 +285,7 @@ class ModlogWikiPublisher:
                 user_agent=f"ModlogWikiPublisher/1.0 by /u/{reddit_config['username']}"
             )
 
-        # Force authentication test
+            # Force authentication test
             me = reddit.user.me()
             logger.info(f"Successfully authenticated as: {me.name}")
             return reddit
@@ -345,6 +375,20 @@ class ModlogWikiPublisher:
             print(f"❌ Connection test failed: {e}")
             return False
 
+    def sanitize_for_table(self, text: str) -> str:
+        """Sanitize text for markdown table display"""
+        if not text:
+            return ''
+        # Replace pipes with similar Unicode character and clean whitespace
+        return text.replace('|', '┃').strip()
+
+    def get_action_group(self, action_type: str) -> str:
+        """Get the group name for an action type"""
+        for group, actions in self.ACTION_GROUPS.items():
+            if action_type in actions:
+                return group
+        return 'other'
+
     def _format_timestamp(self, timestamp: float) -> str:
         """Format timestamp as HH:MM:SS UTC"""
         dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
@@ -381,7 +425,7 @@ class ModlogWikiPublisher:
             f"I would like to inquire about the recent removal of the following {removal_type.lower()}:\n\n"
             f"**Title:** {title}\n\n"
             f"**Action Type:** {action_type}\n\n"
-            f"**Link: **:** {url}\n\n"
+            f"**Link:** {url}\n\n"
             "Please provide details regarding this action.\n\n"
             "Thank you!"
         )
@@ -398,6 +442,7 @@ class ModlogWikiPublisher:
         if action_type in self.IGNORED_ACTIONS:
             logger.debug(f"Ignoring action: [{action_type}] for entry {entry.id} by {entry.mod.name}")
             return None
+        
         # Skip ignored moderators
         ignored_mods = self.config.get('ignored_moderators', [])
         if entry.mod.name in ignored_mods:
@@ -408,73 +453,79 @@ class ModlogWikiPublisher:
         action_id = f"{entry.id}_{entry.created_utc}"
         if self.db.is_processed(action_id):
             return None
+        
+        # Debug logging for non-removal actions
         if action_type not in self.REMOVAL_ACTIONS:
-            logger.info(f'==== Processing non-removal action: [{action_type}] for entry {entry.id} by {entry.mod.name}')
-            logger.info(f"Entry details: {entry.details}")
-            logger.info(f"Entry target author: {entry.target_author}")
-            logger.info(f"Entry target title: {entry.target_title}")
-            logger.info(f"Entry target permalink: {entry.target_permalink}")
-            logger.info(f"Entry created at: {entry.created_utc}")
-            logger.info(f"Entry mod note: {getattr(entry, 'mod_note', None)}")
-            logger.info(f"Entry description: {getattr(entry, 'description', None)}")
+            logger.debug(f'Processing non-removal action: [{action_type}] for entry {entry.id} by {entry.mod.name}')
+            logger.debug(f"Entry details: {entry.details}")
+            logger.debug(f"Entry target author: {entry.target_author}")
+            logger.debug(f"Entry target title: {entry.target_title}")
+            logger.debug(f"Entry target permalink: {entry.target_permalink}")
+        
         # Get Mod Note
-        entry.parsed_mod_note = ''
+        parsed_mod_note = ''
         if hasattr(entry, 'mod_note') and entry.mod_note:
-            entry.parsed_mod_note = entry.mod_note.strip()
+            parsed_mod_note = entry.mod_note.strip()
         elif hasattr(entry, 'description') and entry.description:
-            entry.parsed_mod_note = entry.description.strip()
-        entry.p_mod_name = ''
+            parsed_mod_note = entry.description.strip()
+        
+        # Process moderator name (FIXED BUG: using elif)
+        p_mod_name = ''
         entry_mod = ''
         if hasattr(entry, 'mod') and entry.mod:
             entry_mod = entry.mod.name.strip()
+        
         if entry_mod:
             if entry_mod == '[deleted]':
-                entry.p_mod_name = '[deletedHumanModerator]'
-            if entry_mod == 'AutoModerator':
-                entry.p_mod_name = 'AutoModerator'
-            if entry_mod == 'reddit':
-                entry.p_mod_name = 'reddit'
+                p_mod_name = '[deletedHumanModerator]'
+            elif entry_mod == 'AutoModerator':
+                p_mod_name = 'AutoModerator'
+            elif entry_mod == 'reddit':
+                p_mod_name = 'reddit'
             else:
-                entry.p_mod_name = 'HumanModerator'
+                p_mod_name = 'HumanModerator'
+        
+        # Process details
+        p_details = ''
         if entry.details:
-            entry.p_details = entry.details.strip()
+            p_details = entry.details.strip()
             if action_type in ['addremovalreason']:
-                entry.p_details = entry.parsed_mod_note.strip()
-        else:
-            entry.p_details = ''
-        # Extract details
-        result = {
-            'id': action_id,
-            'timestamp': entry.created_utc,
-            'action_type': action_type,
-            'moderator': entry.p_mod_name,
-            'target_author': entry.target_author if entry.target_author else '[deleted]',
-            'removal_reason': entry.p_details,
-            'note': entry.parsed_mod_note
-        }
-        # Get title and URL based on action type
-        # if target_permalink contents /comments/ then is comment
-        if entry.target_permalink and '/comments/' in entry.target_permalink:
-            is_comment = True
-        else:
-            is_comment = False
+                p_details = parsed_mod_note.strip()
+        
+        # Check if comment (improved detection)
+        is_comment = bool(entry.target_permalink and '/comments/' in entry.target_permalink 
+                         and entry.target_permalink.count('/') > 6)
+        
         # Determine Title for Wiki
         formatted_title = ''
         if is_comment and entry.target_title:
             formatted_title = entry.target_title
         elif is_comment and not entry.target_title:
-            formatted_title = f"Comment by u/{result['target_author']}"
+            formatted_title = f"Comment by u/{entry.target_author if entry.target_author else '[deleted]'}"
         elif not is_comment and entry.target_title:
             formatted_title = entry.target_title
         elif not is_comment and not entry.target_title:
-            formatted_title = f"Post by u/{result['target_author']}"
+            formatted_title = f"Post by u/{entry.target_author if entry.target_author else '[deleted]'}"
         else:
             formatted_title = 'UnknownTitle'
+        
         formatted_link = ''
         if entry.target_permalink:
             formatted_link = f"https://www.reddit.com{entry.target_permalink}"
-        result['title'] = formatted_title
-        result['url'] = formatted_link
+        
+        # Build result with sanitization
+        result = {
+            'id': action_id,
+            'timestamp': entry.created_utc,
+            'action_type': action_type,
+            'moderator': self.sanitize_for_table(p_mod_name),
+            'target_author': self.sanitize_for_table(entry.target_author or '[deleted]'),
+            'removal_reason': self.sanitize_for_table(p_details),
+            'note': self.sanitize_for_table(parsed_mod_note),
+            'title': self.sanitize_for_table(formatted_title),
+            'url': formatted_link  # URLs don't need sanitization
+        }
+        
         # Generate modmail URL for removals
         if action_type in self.REMOVAL_ACTIONS:
             result['modmail_url'] = self._generate_modmail_url(
@@ -484,33 +535,41 @@ class ModlogWikiPublisher:
                 result['url']
             )
         else:
-            logger.info("Non-removal action, skipping modmail URL generation")
+            logger.debug("Non-removal action, skipping modmail URL generation")
             result['modmail_url'] = ''
-        # Remove Pipes from Result Values
-        for key in result:
-            if isinstance(result[key], str):
-                result[key] = result[key].replace('|', ' ')
+        
         return result
 
     def fetch_modlog_entries(self, limit: int = 100) -> List[Dict]:
-        """Fetch and process modlog entries"""
+        """Fetch and process modlog entries with rate limit handling"""
         subreddit = self.reddit.subreddit(self.config['source_subreddit'])
         entries = []
 
         try:
             for entry in subreddit.mod.log(limit=limit):
-                processed = self._process_modlog_entry(entry)
-                if processed:
-                    processed['subreddit'] = subreddit.display_name
-                    entries.append(processed)
-                    # Mark as processed
-                    self.db.mark_processed(
-                        processed['id'],
-                        processed['action_type'],
-                        processed['timestamp']
-                    )
-                    self.db.store_entry(processed)
-
+                try:
+                    processed = self._process_modlog_entry(entry)
+                    if processed:
+                        processed['subreddit'] = subreddit.display_name
+                        entries.append(processed)
+                        # Mark as processed
+                        self.db.mark_processed(
+                            processed['id'],
+                            processed['action_type'],
+                            processed['timestamp']
+                        )
+                        self.db.store_entry(processed)
+                except praw.exceptions.APIException as e:
+                    if e.error_type == "RATELIMIT":
+                        # Extract wait time from message
+                        import re
+                        match = re.search(r'(\d+) minute', str(e))
+                        wait_time = int(match.group(1)) * 60 if match else 60
+                        logger.warning(f"Rate limited, waiting {wait_time} seconds")
+                        time.sleep(wait_time)
+                    else:
+                        raise
+            
             # Sort by timestamp (newest first)
             entries.sort(key=lambda x: x['timestamp'], reverse=True)
 
@@ -524,6 +583,7 @@ class ModlogWikiPublisher:
         # Format action with moderator
         action = f"{entry['action_type']}"
         moderator = entry['moderator']
+        
         # Format title with URL
         if entry['url']:
             title = f"[{entry['title']}]({entry['url']})"
@@ -532,6 +592,7 @@ class ModlogWikiPublisher:
 
         # Format removal reason
         reason = entry['removal_reason'] or entry['note'] or '-'
+        
         # Format inquire link
         if entry['modmail_url']:
             inquire = f"[Contact Mods]({entry['modmail_url']})"
@@ -543,11 +604,18 @@ class ModlogWikiPublisher:
         return f"| {time_str} | {action} | {moderator} | {title} | {reason} | {inquire} |"
 
     def generate_wiki_content(self, entries: List[Dict]) -> str:
-        """Generate wiki page content from entries"""
+        """Generate wiki page content with statistics"""
         if not entries:
             return "# Moderation Log\n\nNo moderation actions to display.\n\n*Last updated: {} UTC*".format(
                 datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
             )
+
+        # Calculate statistics
+        total_actions = len(entries)
+        action_counts = {}
+        for entry in entries:
+            action = entry['action_type']
+            action_counts[action] = action_counts.get(action, 0) + 1
 
         # Group entries by date
         grouped = {}
@@ -562,15 +630,27 @@ class ModlogWikiPublisher:
             "# Moderation Log",
             "",
             f"*Last updated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC*",
+            f"*Total actions in period: {total_actions}*",
             ""
         ]
+
+        # Add summary if there are actions
+        if action_counts and len(action_counts) > 1:  # Only show if there's variety
+            lines.append("## Summary")
+            lines.append("")
+            # Sort by count descending, show top 5
+            for action, count in sorted(action_counts.items(), key=lambda x: x[1], reverse=True)[:5]:
+                lines.append(f"- **{action}**: {count}")
+            if len(action_counts) > 5:
+                lines.append(f"- *...and {len(action_counts) - 5} other action types*")
+            lines.append("")
 
         # Add tables for each date
         for date in sorted(grouped.keys(), reverse=True):
             lines.append(f"## {date}")
             lines.append("")
             lines.append("| Time | Action | Moderator | Content | Reason | Inquire |")
-            lines.append("|------|--------|--------|---------|--------|---------|")
+            lines.append("|------|--------|-----------|---------|--------|---------|")
 
             for entry in grouped[date]:
                 row = self._format_table_row(entry)
@@ -592,7 +672,7 @@ class ModlogWikiPublisher:
                     f"## {date}",
                     "",
                     "| Time | Action | Moderator | Content | Reason | Inquire |",
-                    "|------|--------|--------|---------|--------|---------|"
+                    "|------|--------|-----------|---------|--------|---------|"
                 ]
                 for entry in grouped[date]:
                     row = self._format_table_row(entry)
@@ -615,11 +695,12 @@ class ModlogWikiPublisher:
             subreddit = self.reddit.subreddit(self.config['target_subreddit'])
             wiki_page = self.config.get('wiki_page', 'modlog')
 
-            # Get current wiki content
+            # Get current wiki content (for logging purposes)
             try:
                 existing_content = subreddit.wiki[wiki_page].content_md
+                logger.debug(f"Existing wiki content size: {len(existing_content)} characters")
             except Exception:
-                existing_content = ""
+                logger.info("Wiki page doesn't exist yet, will create new")
 
             # Only use DB entries; wiki parsing no longer needed
             cutoff = time.time() - self.config.get('retention_days', 30) * 86400
@@ -639,10 +720,15 @@ class ModlogWikiPublisher:
             logger.info(f"Wiki page updated with {len(retained)} entries.")
             return True
 
+        except praw.exceptions.APIException as e:
+            if e.error_type == "RATELIMIT":
+                logger.error(f"Rate limited when updating wiki: {e}")
+                return False
+            else:
+                raise
         except Exception as e:
             logger.error(f"Failed to update wiki: {e}")
             return False
-
 
     def run_once(self):
         """Run a single update cycle"""
@@ -656,7 +742,7 @@ class ModlogWikiPublisher:
 
         if entries:
             logger.info(f"Processing {len(entries)} new modlog entries")
-            # Generate wiki content
+            # Update wiki with current database content
             self.update_wiki(entries)
         else:
             logger.info("No new modlog entries to process")
@@ -697,10 +783,10 @@ def main():
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
 
-    # Create and run publisher
-    publisher = ModlogWikiPublisher(args.config, args)  # Pass args
-
     try:
+        # Create and run publisher
+        publisher = ModlogWikiPublisher(args.config, args)
+
         if args.test:
             # Test mode - just validate connection
             success = publisher.test_connection()
@@ -713,8 +799,15 @@ def main():
             publisher.run_once()
     except KeyboardInterrupt:
         logger.info("Received interrupt signal, shutting down...")
+    except ValueError as e:
+        logger.error(f"Configuration error: {e}")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+        sys.exit(1)
     finally:
-        publisher.cleanup()
+        if 'publisher' in locals():
+            publisher.cleanup()
 
 
 if __name__ == "__main__":
