@@ -1,0 +1,15 @@
+{
+  "reddit": {
+    "client_id": "YOUR_CLIENT_ID_HERE",
+    "client_secret": "YOUR_CLIENT_SECRET_HERE",
+    "username": "YOUR_BOT_USERNAME",
+    "password": "YOUR_BOT_PASSWORD"
+  },
+  "source_subreddit": "YourSubreddit",
+  "target_subreddit": "YourSubreddit",
+  "wiki_page": "modlog",
+  "ignored_moderators": ["AutoModerator", "BotDefense"],
+  "update_interval": 300,
+  "batch_size": 100,
+  "retention_days": 30
+}
