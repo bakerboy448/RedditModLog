@@ -431,9 +431,6 @@ class ModlogWikiPublisher:
 
         # Format time
         time_str = self._format_timestamp(entry['timestamp'])
-        if action  == 'addremovalreason':
-            print("Logging addremovalreason action")
-            print(f"| {time_str} | {action} | {moderator} | {title} | {reason} | {inquire} |")
         return f"| {time_str} | {action} | {moderator} | {title} | {reason} | {inquire} |"
 
     def generate_wiki_content(self, entries: List[Dict]) -> str:
