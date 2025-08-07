@@ -16,6 +16,7 @@ from typing import Dict, List, Optional, Set
 from urllib.parse import quote
 
 import praw
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -36,23 +37,110 @@ class ModlogDatabase:
     def _init_db(self):
         """Initialize database and create tables if needed"""
         self.conn = sqlite3.connect(self.db_path)
+
+        # Create migrations table first
         self.conn.execute('''
-            CREATE TABLE IF NOT EXISTS processed_actions (
-                action_id TEXT PRIMARY KEY,
-                action_type TEXT,
-                timestamp INTEGER,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-        self.conn.execute('''
-            CREATE INDEX IF NOT EXISTS idx_timestamp
-            ON processed_actions(timestamp)
-        ''')
-        self.conn.execute('''
-            CREATE INDEX IF NOT EXISTS idx_created_at
-            ON processed_actions(created_at)
-        ''')
+
+        # Check if migration 0 is already applied
+        cursor = self.conn.execute("SELECT 1 FROM schema_migrations WHERE id = 0")
+        if not cursor.fetchone():
+            logger.info("Applying Migration 0: Initial schema")
+            self.conn.execute('''
+                CREATE TABLE IF NOT EXISTS processed_actions (
+                    action_id TEXT PRIMARY KEY,
+                    action_type TEXT,
+                    timestamp INTEGER,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            self.conn.execute('''
+                CREATE TABLE IF NOT EXISTS modlog_entries (
+                    action_id TEXT PRIMARY KEY,
+                    timestamp INTEGER,
+                    action_type TEXT,
+                    moderator TEXT,
+                    target_author TEXT,
+                    title TEXT,
+                    url TEXT,
+                    removal_reason TEXT,
+                    note TEXT,
+                    modmail_url TEXT,
+                    subreddit TEXT
+                )
+            ''')
+            self.conn.execute('''
+                CREATE INDEX IF NOT EXISTS idx_modlog_timestamp
+                ON modlog_entries(timestamp)
+            ''')
+            self.conn.execute("INSERT INTO schema_migrations (id, name) VALUES (0, 'initial schema')")
         self.conn.commit()
+
+        # Apply migration 1 if not already applied
+        cursor = self.conn.execute("SELECT 1 FROM schema_migrations WHERE id = 1")
+        if not cursor.fetchone():
+            logger.info("Applying Migration 1: Add subreddit column to modlog_entries")
+            try:
+                self.conn.execute("ALTER TABLE modlog_entries ADD COLUMN subreddit TEXT")
+            except sqlite3.OperationalError:
+                pass  # Already exists or failed silently
+            self.conn.execute("INSERT INTO schema_migrations (id, name) VALUES (1, 'add subreddit column')")
+        self.conn.commit()
+
+        logger.info(f"Database initialized at {self.db_path}")
+
+    def store_entry(self, entry: Dict):
+        """Insert or replace a modlog entry record"""
+        self.conn.execute('''
+            INSERT OR REPLACE INTO modlog_entries (
+                action_id, timestamp, action_type, moderator, target_author,
+                title, url, removal_reason, note, modmail_url, subreddit
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            entry['id'],
+            entry['timestamp'],
+            entry['action_type'],
+            entry['moderator'],
+            entry['target_author'],
+            entry['title'],
+            entry['url'],
+            entry['removal_reason'],
+            entry['note'],
+            entry['modmail_url'],
+            entry['subreddit']
+        ))
+        self.conn.commit()
+
+
+    def get_recent_entries(self, cutoff_timestamp: float, subreddit: Optional[str] = None) -> List[Dict]:
+        """Return all modlog entries newer than the cutoff, optionally filtered by subreddit"""
+        query = '''
+            SELECT action_id, timestamp, action_type, moderator, target_author,title, url, removal_reason, note, modmail_url
+            FROM modlog_entries
+            WHERE timestamp >= ?
+        '''
+        params = [cutoff_timestamp]
+
+        if subreddit:
+            query += ' AND subreddit = ?'
+            params.append(subreddit)
+
+        cursor = self.conn.execute(query, params)
+        rows = cursor.fetchall()
+        return [
+            {
+                'id': r[0], 'timestamp': r[1], 'action_type': r[2], 'moderator': r[3],
+                'target_author': r[4], 'title': r[5], 'url': r[6],
+                'removal_reason': r[7], 'note': r[8], 'modmail_url': r[9]
+            } for r in rows
+    ]
+
+
 
     def is_processed(self, action_id: str) -> bool:
         """Check if an action has been processed"""
@@ -109,19 +197,21 @@ class ModlogWikiPublisher:
         'edit_saved_response', 'edited_widget', 'editrule', 'editsettings',
         'ignorereports', 'lock', 'marknsfw', 'reorderrules', 'setflair', 'spoiler',
         'sticky', 'unlock', 'unmarknsfw', 'unspoiler', 'unsticky', 'wikirevise',
-        'wikipermlevel', 'wikipagelisted', 'wikipageunlisted', 'createrule','editflair','invitemoderator'
-        'acceptmoderatorinvite', 'removemoderator', 'rejectmoderatorinvite',
+        'wikipermlevel', 'wikipagelisted', 'wikipageunlisted', 'createrule','editflair','invitemoderator',
+        'acceptmoderatorinvite', 'removemoderator', 'rejectmoderatorinvite','unbanuser', 'setsuggestedsort',
+        'muteuser', 'submit_scheduled_post'
     }
 
-    def __init__(self, config_path: str = "config.json"):
-        """Initialize with configuration"""
+    def __init__(self, config_path: str = "config.json", source_subreddit_override: Optional[str] = None):
         self.config = self._load_config(config_path)
         self.reddit = self._init_reddit()
-        self.db = ModlogDatabase(
-            retention_days=self.config.get('retention_days', 30)
-        )
-        self.wiki_char_limit = 524288  # Reddit wiki character limit
+        self.db = ModlogDatabase(retention_days=self.config.get('retention_days', 30))
+        self.wiki_char_limit = 524288
         self.batch_size = self.config.get('batch_size', 100)
+        if source_subreddit_override:
+            self.config['source_subreddit'] = source_subreddit_override
+        self.config['target_subreddit'] = self.config['source_subreddit']
+
 
     def _load_config(self, config_path: str) -> dict:
         """Load configuration from JSON file"""
@@ -293,12 +383,12 @@ class ModlogWikiPublisher:
 
         # Skip ignored actions
         if action_type in self.IGNORED_ACTIONS:
-            logger.info(f"Ignoring action: [{action_type}] for entry {entry.id} by {entry.mod.name}")
+            logger.debug(f"Ignoring action: [{action_type}] for entry {entry.id} by {entry.mod.name}")
             return None
         # Skip ignored moderators
         ignored_mods = self.config.get('ignored_moderators', [])
         if entry.mod.name in ignored_mods:
-            logger.info(f"Ignoring action by ignored moderator: [{entry.mod.name}] for entry {entry.id}")
+            logger.debug(f"Ignoring action by ignored moderator: [{entry.mod.name}] for entry {entry.id}")
             return None
 
         # Check if already processed
@@ -329,6 +419,8 @@ class ModlogWikiPublisher:
                 entry.p_mod_name = '[deletedHumanModerator]'
             if entry_mod == 'AutoModerator':
                 entry.p_mod_name = 'AutoModerator'
+            if entry_mod == 'reddit':
+                entry.p_mod_name = 'reddit'
             else:
                 entry.p_mod_name = 'HumanModerator'
         if entry.details:
@@ -396,6 +488,7 @@ class ModlogWikiPublisher:
             for entry in subreddit.mod.log(limit=limit):
                 processed = self._process_modlog_entry(entry)
                 if processed:
+                    processed['subreddit'] = subreddit.display_name
                     entries.append(processed)
                     # Mark as processed
                     self.db.mark_processed(
@@ -403,6 +496,7 @@ class ModlogWikiPublisher:
                         processed['action_type'],
                         processed['timestamp']
                     )
+                    self.db.store_entry(processed)
 
             # Sort by timestamp (newest first)
             entries.sort(key=lambda x: x['timestamp'], reverse=True)
@@ -434,46 +528,6 @@ class ModlogWikiPublisher:
         # Format time
         time_str = self._format_timestamp(entry['timestamp'])
         return f"| {time_str} | {action} | {moderator} | {title} | {reason} | {inquire} |"
-
-    def _parse_existing_wiki(self, content: str) -> List[Dict]:
-        """Parse existing wiki table into modlog entry dicts"""
-        rows = re.findall(
-            r'^\| (.+?) \| (.+?) \| (.+?) \| \[(.+?)\]\((https://[^\)]+)\) \| (.+?) \| (?:\[(.+?)\]\((https://[^\)]+)\)|-) \|$',
-            content, re.MULTILINE
-        )
-        entries = []
-        for row in rows:
-            time_str, action_type, moderator, title, url, reason, _, modmail_url = row
-            try:
-                # Reconstruct an ID from URL + action_type + timestamp
-                timestamp = self._parse_time_str(time_str)
-                action_id = f"{url.split('/')[-1]}_{int(timestamp)}"
-
-                entries.append({
-                    'id': action_id,
-                    'timestamp': timestamp,
-                    'action_type': action_type,
-                    'moderator': moderator,
-                    'title': title,
-                    'url': url,
-                    'removal_reason': reason,
-                    'note': '',
-                    'modmail_url': modmail_url
-                })
-            except Exception as e:
-                logger.debug(f"Failed to parse row: {row} ({e})")
-                continue
-        return entries
-
-    def _parse_time_str(self, timestr: str) -> float:
-        """Parse HH:MM:SS UTC into epoch (roughly today)"""
-        try:
-            now = datetime.now(timezone.utc)
-            t = datetime.strptime(timestr, "%H:%M:%S UTC").time()
-            dt = datetime.combine(now.date(), t, tzinfo=timezone.utc)
-            return dt.timestamp()
-        except:
-            return 0
 
     def generate_wiki_content(self, entries: List[Dict]) -> str:
         """Generate wiki page content from entries"""
@@ -554,20 +608,9 @@ class ModlogWikiPublisher:
             except Exception:
                 existing_content = ""
 
-            # Parse existing entries
-            existing_entries = self._parse_existing_wiki(existing_content)
-
-            # Merge and dedupe
-            all_entries = {e['id']: e for e in existing_entries}
-            for entry in new_entries:
-                all_entries[entry['id']] = entry
-
-            # Apply retention policy
+            # Only use DB entries; wiki parsing no longer needed
             cutoff = time.time() - self.config.get('retention_days', 30) * 86400
-            retained = [
-                e for e in all_entries.values()
-                if e['timestamp'] >= cutoff
-            ]
+            retained = self.db.get_recent_entries(cutoff)
 
             # Sort newest first
             retained.sort(key=lambda x: x['timestamp'], reverse=True)
@@ -647,14 +690,17 @@ def main():
         action='store_true',
         help='Enable debug logging'
     )
-
+    parser.add_argument(
+        '--source-subreddit',
+        help='Subreddit to monitor for modlog actions (overrides config)'
+    )
     args = parser.parse_args()
 
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
 
     # Create and run publisher
-    publisher = ModlogWikiPublisher(args.config)
+    publisher = ModlogWikiPublisher(args.config, source_subreddit_override=args.source_subreddit)
 
     try:
         if args.test:
