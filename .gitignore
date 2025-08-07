@@ -5,6 +5,7 @@ config.*.json
 
 # Database files
 *.db
+*.db-journal
 *.sqlite
 *.sqlite3
 
