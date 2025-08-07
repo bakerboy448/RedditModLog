@@ -6,6 +6,7 @@ Scrapes moderation logs and publishes them to a subreddit wiki page
 import argparse
 import json
 import logging
+import logging.handlers
 import re
 import sqlite3
 import sys
@@ -17,11 +18,18 @@ from urllib.parse import quote
 
 import praw
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+# Global logger setup - will be enhanced with per-subreddit loggers
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+
+# Console handler for general output
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+console_handler.setFormatter(console_formatter)
+root_logger.addHandler(console_handler)
+
+# Main logger
 logger = logging.getLogger(__name__)
 
 
@@ -220,6 +228,8 @@ class ModlogWikiPublisher:
         self.db = ModlogDatabase(retention_days=self.config.get('retention_days', 30))
         self.wiki_char_limit = 524288
         self.batch_size = self.config.get('batch_size', 100)
+        self.subreddit_loggers = {}
+        self._setup_subreddit_logging()
 
     def _load_config(self, config_path: str, cli_args: argparse.Namespace) -> dict:
         """Load JSON config, then override with CLI args"""
@@ -267,6 +277,54 @@ class ModlogWikiPublisher:
         if not 1 <= retention <= 365:
             logger.warning("Unusual retention_days: %s, using 30", retention)
             config['retention_days'] = 30
+
+    def _setup_subreddit_logging(self):
+        """Setup per-subreddit logging with rotation"""
+        # Create logs directory if it doesn't exist
+        log_dir = Path(self.config.get('log_directory', 'logs'))
+        log_dir.mkdir(exist_ok=True)
+        
+        # Get subreddits to set up logging for
+        subreddits = [self.config['source_subreddit']]
+        if 'target_subreddit' in self.config and self.config['target_subreddit'] != self.config['source_subreddit']:
+            subreddits.append(self.config['target_subreddit'])
+        
+        for subreddit in subreddits:
+            # Create logger for this subreddit
+            sub_logger = logging.getLogger(f"modlog.{subreddit}")
+            sub_logger.setLevel(logging.DEBUG)  # Let handlers control level
+            
+            # Prevent adding handlers multiple times
+            if sub_logger.handlers:
+                continue
+                
+            # Create rotating file handler
+            log_file = log_dir / f"{subreddit}_modlog.log"
+            file_handler = logging.handlers.RotatingFileHandler(
+                log_file,
+                maxBytes=self.config.get('log_max_bytes', 10 * 1024 * 1024),  # 10MB default
+                backupCount=self.config.get('log_backup_count', 5),  # Keep 5 backups
+                encoding='utf-8'
+            )
+            
+            # Create formatter for subreddit logs
+            file_formatter = logging.Formatter(
+                '%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s'
+            )
+            file_handler.setFormatter(file_formatter)
+            file_handler.setLevel(logging.DEBUG)
+            
+            # Add handler to logger
+            sub_logger.addHandler(file_handler)
+            
+            # Store reference
+            self.subreddit_loggers[subreddit] = sub_logger
+            
+            logger.info("Setup logging for subreddit: %s -> %s", subreddit, log_file)
+    
+    def get_subreddit_logger(self, subreddit: str) -> logging.Logger:
+        """Get logger for specific subreddit"""
+        return self.subreddit_loggers.get(subreddit, logger)
 
     def _init_reddit(self) -> praw.Reddit:
         """Initialize Reddit API connection"""
@@ -543,8 +601,10 @@ class ModlogWikiPublisher:
     def fetch_modlog_entries(self, limit: int = 100) -> List[Dict]:
         """Fetch and process modlog entries with rate limit handling"""
         subreddit = self.reddit.subreddit(self.config['source_subreddit'])
+        sub_logger = self.get_subreddit_logger(self.config['source_subreddit'])
         entries = []
 
+        sub_logger.info("Starting to fetch modlog entries, limit: %s", limit)
         try:
             for entry in subreddit.mod.log(limit=limit):
                 try:
@@ -552,6 +612,8 @@ class ModlogWikiPublisher:
                     if processed:
                         processed['subreddit'] = subreddit.display_name
                         entries.append(processed)
+                        sub_logger.debug("Processed entry: %s [%s] by %s", 
+                                       processed['id'], processed['action_type'], processed['moderator'])
                         # Mark as processed
                         self.db.mark_processed(
                             processed['id'],
@@ -565,15 +627,17 @@ class ModlogWikiPublisher:
                         import re
                         match = re.search(r'(\d+) minute', str(e))
                         wait_time = int(match.group(1)) * 60 if match else 60
-                        logger.warning("Rate limited, waiting %s seconds", wait_time)
+                        sub_logger.warning("Rate limited, waiting %s seconds", wait_time)
                         time.sleep(wait_time)
                     else:
                         raise
             
             # Sort by timestamp (newest first)
             entries.sort(key=lambda x: x['timestamp'], reverse=True)
+            sub_logger.info("Successfully fetched %s modlog entries", len(entries))
 
         except Exception as e:
+            sub_logger.error("Error fetching modlog: %s", e)
             logger.error("Error fetching modlog: %s", e)
 
         return entries
@@ -691,20 +755,27 @@ class ModlogWikiPublisher:
 
     def update_wiki(self, new_entries: List[Dict]) -> bool:
         """Merge with existing wiki content and update"""
+        target_sub = self.config['target_subreddit']
+        sub_logger = self.get_subreddit_logger(target_sub)
+        
         try:
-            subreddit = self.reddit.subreddit(self.config['target_subreddit'])
+            subreddit = self.reddit.subreddit(target_sub)
             wiki_page = self.config.get('wiki_page', 'modlog')
+            
+            sub_logger.info("Updating wiki page: /r/%s/wiki/%s", target_sub, wiki_page)
 
             # Get current wiki content (for logging purposes)
             try:
                 existing_content = subreddit.wiki[wiki_page].content_md
-                logger.debug("Existing wiki content size: %s characters", len(existing_content))
+                sub_logger.debug("Existing wiki content size: %s characters", len(existing_content))
             except Exception:
-                logger.info("Wiki page doesn't exist yet, will create new")
+                sub_logger.info("Wiki page doesn't exist yet, will create new")
 
             # Only use DB entries; wiki parsing no longer needed
             cutoff = time.time() - self.config.get('retention_days', 30) * 86400
             retained = self.db.get_recent_entries(cutoff, subreddit=self.config['source_subreddit'])
+            
+            sub_logger.debug("Retrieved %s entries from database for retention period", len(retained))
 
             # Sort newest first
             retained.sort(key=lambda x: x['timestamp'], reverse=True)
@@ -717,22 +788,29 @@ class ModlogWikiPublisher:
                 content=content,
                 reason="Rolling modlog update with retention"
             )
+            sub_logger.info("Wiki page updated with %s entries, content size: %s chars", len(retained), len(content))
             logger.info("Wiki page updated with %s entries.", len(retained))
             return True
 
         except praw.exceptions.APIException as e:
             if e.error_type == "RATELIMIT":
+                sub_logger.error("Rate limited when updating wiki: %s", e)
                 logger.error("Rate limited when updating wiki: %s", e)
                 return False
             else:
                 raise
         except Exception as e:
+            sub_logger.error("Failed to update wiki: %s", e)
             logger.error("Failed to update wiki: %s", e)
             return False
 
     def run_once(self):
         """Run a single update cycle"""
+        source_sub = self.config['source_subreddit']
+        sub_logger = self.get_subreddit_logger(source_sub)
+        
         logger.info("Starting modlog update cycle...")
+        sub_logger.info("=== Starting update cycle for /r/%s ===", source_sub)
 
         # Cleanup old database entries
         self.db.cleanup_old_entries()
@@ -742,10 +820,14 @@ class ModlogWikiPublisher:
 
         if entries:
             logger.info("Processing %s new modlog entries", len(entries))
+            sub_logger.info("Processing %s new modlog entries", len(entries))
             # Update wiki with current database content
             self.update_wiki(entries)
         else:
             logger.info("No new modlog entries to process")
+            sub_logger.info("No new modlog entries to process")
+            
+        sub_logger.info("=== Completed update cycle for /r/%s ===", source_sub)
 
     def run_continuous(self):
         """Run continuously with interval"""
@@ -764,6 +846,13 @@ class ModlogWikiPublisher:
     def cleanup(self):
         """Cleanup resources"""
         self.db.close()
+        
+        # Close all subreddit loggers
+        for subreddit, sub_logger in self.subreddit_loggers.items():
+            for handler in sub_logger.handlers[:]:
+                handler.close()
+                sub_logger.removeHandler(handler)
+            logger.debug("Closed logging for subreddit: %s", subreddit)
 
 
 def main():
