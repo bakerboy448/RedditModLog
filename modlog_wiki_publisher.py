@@ -167,8 +167,9 @@ class ModlogDatabase:
         cutoff_date = datetime.now() - timedelta(days=self.retention_days)
         self.conn.execute(
             "DELETE FROM processed_actions WHERE created_at < ?",
-            (cutoff_date,)
+        (cutoff_date.isoformat(),)
         )
+
         self.conn.commit()
         # Vacuum occasionally to reclaim space
         if time.time() % 86400 < 300:  # Once per day approximately
