@@ -203,28 +203,40 @@ class ModlogWikiPublisher:
         'muteuser', 'submit_scheduled_post'
     }
 
-    def __init__(self, config_path: str = "config.json", source_subreddit_override: Optional[str] = None):
-        self.config = self._load_config(config_path)
+    def __init__(self, config_path: str = "config.json", cli_args: Optional[argparse.Namespace] = None):
+        self.config = self._load_config(config_path, cli_args or argparse.Namespace())
         self.reddit = self._init_reddit()
         self.db = ModlogDatabase(retention_days=self.config.get('retention_days', 30))
         self.wiki_char_limit = 524288
         self.batch_size = self.config.get('batch_size', 100)
-        if source_subreddit_override:
-            self.config['source_subreddit'] = source_subreddit_override
-        self.config['target_subreddit'] = self.config['source_subreddit']
 
 
-    def _load_config(self, config_path: str) -> dict:
-        """Load configuration from JSON file"""
+    def _load_config(self, config_path: str, cli_args: argparse.Namespace) -> dict:
+        """Load JSON config, then override with CLI args"""
+        config = {}
         try:
             with open(config_path, 'r') as f:
-                return json.load(f)
+                config = json.load(f)
         except FileNotFoundError:
-            logger.error(f"Config file not found: {config_path}")
-            sys.exit(1)
+            logger.warning(f"No config file found at {config_path}, using CLI only")
         except json.JSONDecodeError as e:
             logger.error(f"Invalid JSON in config: {e}")
             sys.exit(1)
+        # CLI overrides
+        if cli_args.source_subreddit:
+            config['source_subreddit'] = cli_args.source_subreddit
+        if cli_args.wiki_page:
+            config['wiki_page'] = cli_args.wiki_page
+        if cli_args.retention_days is not None:
+            config['retention_days'] = cli_args.retention_days
+        if cli_args.batch_size is not None:
+            config['batch_size'] = cli_args.batch_size
+        if cli_args.interval is not None:
+            config['update_interval'] = cli_args.interval
+        if 'target_subreddit' not in config:
+            config['target_subreddit'] = config.get('source_subreddit')
+        return config
+
 
     def _init_reddit(self) -> praw.Reddit:
         """Initialize Reddit API connection"""
@@ -671,37 +683,22 @@ class ModlogWikiPublisher:
 def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(description='Reddit Modlog Wiki Publisher')
-    parser.add_argument(
-        '--config',
-        default='config.json',
-        help='Path to configuration file (default: config.json)'
-    )
-    parser.add_argument(
-        '--continuous',
-        action='store_true',
-        help='Run continuously (default: run once and exit)'
-    )
-    parser.add_argument(
-        '--test',
-        action='store_true',
-        help='Test configuration and exit'
-    )
-    parser.add_argument(
-        '--debug',
-        action='store_true',
-        help='Enable debug logging'
-    )
-    parser.add_argument(
-        '--source-subreddit',
-        help='Subreddit to monitor for modlog actions (overrides config)'
-    )
+    parser.add_argument('--config', default='config.json', help='Path to configuration file')
+    parser.add_argument('--source-subreddit', help='Source subreddit (modlog source)')
+    parser.add_argument('--wiki-page', help='Wiki page name (default: modlog)')
+    parser.add_argument('--retention-days', type=int, help='Retention window in days')
+    parser.add_argument('--batch-size', type=int, help='Batch size to fetch per run')
+    parser.add_argument('--interval', type=int, help='Interval (seconds) for continuous mode')
+    parser.add_argument('--debug', action='store_true', help='Enable debug logging')
+    parser.add_argument('--continuous', action='store_true', help='Run continuously')
+    parser.add_argument('--test', action='store_true', help='Test configuration and exit')
     args = parser.parse_args()
 
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
 
     # Create and run publisher
-    publisher = ModlogWikiPublisher(args.config, source_subreddit_override=args.source_subreddit)
+    publisher = ModlogWikiPublisher(args.config, args)  # Pass args
 
     try:
         if args.test:
