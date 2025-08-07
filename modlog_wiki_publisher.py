@@ -92,7 +92,7 @@ class ModlogDatabase:
             self.conn.execute("INSERT INTO schema_migrations (id, name) VALUES (1, 'add subreddit column')")
         self.conn.commit()
 
-        logger.info(f"Database initialized at {self.db_path}")
+        logger.info("Database initialized at %s", self.db_path)
 
     def store_entry(self, entry: Dict):
         """Insert or replace a modlog entry record"""
@@ -228,9 +228,9 @@ class ModlogWikiPublisher:
             with open(config_path, 'r') as f:
                 config = json.load(f)
         except FileNotFoundError:
-            logger.warning(f"No config file found at {config_path}, using CLI only")
+            logger.warning("No config file found at %s, using CLI only", config_path)
         except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON in config: {e}")
+            logger.error("Invalid JSON in config: %s", e)
             sys.exit(1)
         
         # CLI overrides
@@ -265,7 +265,7 @@ class ModlogWikiPublisher:
         # Validate retention_days is reasonable
         retention = config.get('retention_days', 30)
         if not 1 <= retention <= 365:
-            logger.warning(f"Unusual retention_days: {retention}, using 30")
+            logger.warning("Unusual retention_days: %s, using 30", retention)
             config['retention_days'] = 30
 
     def _init_reddit(self) -> praw.Reddit:
@@ -273,8 +273,8 @@ class ModlogWikiPublisher:
         reddit_config = self.config['reddit']
 
         # Add debug logging
-        logger.debug(f"Attempting login with username: {reddit_config['username']}")
-        logger.debug(f"Client ID: {reddit_config['client_id'][:4]}...")  # Show first 4 chars
+        logger.debug("Attempting login with username: %s", reddit_config['username'])
+        logger.debug("Client ID: %s...", reddit_config['client_id'][:4])  # Show first 4 chars
 
         try:
             reddit = praw.Reddit(
@@ -287,15 +287,15 @@ class ModlogWikiPublisher:
 
             # Force authentication test
             me = reddit.user.me()
-            logger.info(f"Successfully authenticated as: {me.name}")
+            logger.info("Successfully authenticated as: %s", me.name)
             return reddit
 
         except Exception as e:
-            logger.error(f"Authentication failed: {e}")
-            logger.error(f"Error type: {type(e).__name__}")
+            logger.error("Authentication failed: %s", e)
+            logger.error("Error type: %s", type(e).__name__)
             if hasattr(e, 'response'):
-                logger.error(f"Response status: {e.response.status_code}")
-                logger.error(f"Response body: {e.response.text}")
+                logger.error("Response status: %s", e.response.status_code)
+                logger.error("Response body: %s", e.response.text)
             raise
 
     def test_connection(self) -> bool:
@@ -440,13 +440,13 @@ class ModlogWikiPublisher:
 
         # Skip ignored actions
         if action_type in self.IGNORED_ACTIONS:
-            logger.debug(f"Ignoring action: [{action_type}] for entry {entry.id} by {entry.mod.name}")
+            logger.debug("Ignoring action: [%s] for entry %s by %s", action_type, entry.id, entry.mod.name)
             return None
         
         # Skip ignored moderators
         ignored_mods = self.config.get('ignored_moderators', [])
         if entry.mod.name in ignored_mods:
-            logger.debug(f"Ignoring action by ignored moderator: [{entry.mod.name}] for entry {entry.id}")
+            logger.debug("Ignoring action by ignored moderator: [%s] for entry %s", entry.mod.name, entry.id)
             return None
 
         # Check if already processed
@@ -456,11 +456,11 @@ class ModlogWikiPublisher:
         
         # Debug logging for non-removal actions
         if action_type not in self.REMOVAL_ACTIONS:
-            logger.debug(f'Processing non-removal action: [{action_type}] for entry {entry.id} by {entry.mod.name}')
-            logger.debug(f"Entry details: {entry.details}")
-            logger.debug(f"Entry target author: {entry.target_author}")
-            logger.debug(f"Entry target title: {entry.target_title}")
-            logger.debug(f"Entry target permalink: {entry.target_permalink}")
+            logger.debug('Processing non-removal action: [%s] for entry %s by %s', action_type, entry.id, entry.mod.name)
+            logger.debug("Entry details: %s", entry.details)
+            logger.debug("Entry target author: %s", entry.target_author)
+            logger.debug("Entry target title: %s", entry.target_title)
+            logger.debug("Entry target permalink: %s", entry.target_permalink)
         
         # Get Mod Note
         parsed_mod_note = ''
@@ -565,7 +565,7 @@ class ModlogWikiPublisher:
                         import re
                         match = re.search(r'(\d+) minute', str(e))
                         wait_time = int(match.group(1)) * 60 if match else 60
-                        logger.warning(f"Rate limited, waiting {wait_time} seconds")
+                        logger.warning("Rate limited, waiting %s seconds", wait_time)
                         time.sleep(wait_time)
                     else:
                         raise
@@ -574,7 +574,7 @@ class ModlogWikiPublisher:
             entries.sort(key=lambda x: x['timestamp'], reverse=True)
 
         except Exception as e:
-            logger.error(f"Error fetching modlog: {e}")
+            logger.error("Error fetching modlog: %s", e)
 
         return entries
 
@@ -698,7 +698,7 @@ class ModlogWikiPublisher:
             # Get current wiki content (for logging purposes)
             try:
                 existing_content = subreddit.wiki[wiki_page].content_md
-                logger.debug(f"Existing wiki content size: {len(existing_content)} characters")
+                logger.debug("Existing wiki content size: %s characters", len(existing_content))
             except Exception:
                 logger.info("Wiki page doesn't exist yet, will create new")
 
@@ -717,17 +717,17 @@ class ModlogWikiPublisher:
                 content=content,
                 reason="Rolling modlog update with retention"
             )
-            logger.info(f"Wiki page updated with {len(retained)} entries.")
+            logger.info("Wiki page updated with %s entries.", len(retained))
             return True
 
         except praw.exceptions.APIException as e:
             if e.error_type == "RATELIMIT":
-                logger.error(f"Rate limited when updating wiki: {e}")
+                logger.error("Rate limited when updating wiki: %s", e)
                 return False
             else:
                 raise
         except Exception as e:
-            logger.error(f"Failed to update wiki: {e}")
+            logger.error("Failed to update wiki: %s", e)
             return False
 
     def run_once(self):
@@ -741,7 +741,7 @@ class ModlogWikiPublisher:
         entries = self.fetch_modlog_entries(limit=self.batch_size)
 
         if entries:
-            logger.info(f"Processing {len(entries)} new modlog entries")
+            logger.info("Processing %s new modlog entries", len(entries))
             # Update wiki with current database content
             self.update_wiki(entries)
         else:
@@ -750,15 +750,15 @@ class ModlogWikiPublisher:
     def run_continuous(self):
         """Run continuously with interval"""
         interval = self.config.get('update_interval', 300)
-        logger.info(f"Starting continuous mode, updating every {interval} seconds")
+        logger.info("Starting continuous mode, updating every %s seconds", interval)
 
         while True:
             try:
                 self.run_once()
             except Exception as e:
-                logger.error(f"Error in update cycle: {e}")
+                logger.error("Error in update cycle: %s", e)
 
-            logger.info(f"Sleeping for {interval} seconds...")
+            logger.info("Sleeping for %s seconds...", interval)
             time.sleep(interval)
 
     def cleanup(self):
@@ -800,10 +800,10 @@ def main():
     except KeyboardInterrupt:
         logger.info("Received interrupt signal, shutting down...")
     except ValueError as e:
-        logger.error(f"Configuration error: {e}")
+        logger.error("Configuration error: %s", e)
         sys.exit(1)
     except Exception as e:
-        logger.error(f"Unexpected error: {e}")
+        logger.error("Unexpected error: %s", e)
         sys.exit(1)
     finally:
         if 'publisher' in locals():
