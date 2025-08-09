@@ -679,31 +679,43 @@ def get_recent_actions_from_db(config: Dict[str, Any], force_all_actions: bool =
         return []
 
 def format_content_link(action) -> str:
-    """Format content link for wiki table - only link to actual content, never users"""
-    # Get the title
-    if hasattr(action, 'target_title') and action.target_title:
-        title = action.target_title
-    elif hasattr(action, 'target_author') and action.target_author:
-        # Handle case where target_author might be string or object
-        if hasattr(action.target_author, 'name'):
-            title = f"Content by u/{action.target_author.name}"
-        else:
-            title = f"Content by u/{action.target_author}"
-    else:
-        title = "Unknown content"
+    """Format content link for wiki table - matches main branch approach"""
     
-    # Get permalink - but ONLY if it's actual content, not a user profile
+    # Determine if it's a comment (like main branch logic)
+    is_comment = False
     permalink = None
     if hasattr(action, 'target_permalink_cached') and action.target_permalink_cached:
         permalink = action.target_permalink_cached
+        is_comment = bool(permalink and '/comments/' in permalink and permalink.count('/') > 6)
     elif hasattr(action, 'target_permalink') and action.target_permalink:
         permalink = action.target_permalink if action.target_permalink.startswith('http') else f"https://www.reddit.com{action.target_permalink}"
+        is_comment = bool(action.target_permalink and '/comments/' in action.target_permalink and action.target_permalink.count('/') > 6)
     
-    # Only create a link if the permalink points to actual content (/comments/), not user profiles (/u/)
+    # Determine title like main branch
+    title = ''
+    if is_comment and hasattr(action, 'target_title') and action.target_title:
+        title = action.target_title
+    elif is_comment and (not hasattr(action, 'target_title') or not action.target_title):
+        # Comment without title
+        author = getattr(action, 'target_author', '[deleted]')
+        if hasattr(author, 'name'):
+            author = author.name
+        title = f"Comment by u/{author or '[deleted]'}"
+    elif not is_comment and hasattr(action, 'target_title') and action.target_title:
+        title = action.target_title
+    elif not is_comment and (not hasattr(action, 'target_title') or not action.target_title):
+        # Post without title
+        author = getattr(action, 'target_author', '[deleted]')
+        if hasattr(author, 'name'):
+            author = author.name
+        title = f"Post by u/{author or '[deleted]'}"
+    else:
+        title = 'Unknown content'
+    
+    # Only link if we have actual content URL (not user profiles)
     if permalink and '/comments/' in permalink and '/u/' not in permalink:
         return f"[{title}]({permalink})"
     else:
-        # No link if we don't have actual content URL - just show title
         return title
 
 def extract_content_id_from_permalink(permalink):
