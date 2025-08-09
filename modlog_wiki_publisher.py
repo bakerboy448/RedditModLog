@@ -1099,12 +1099,16 @@ def create_argument_parser():
         help='Disable automatic config file updates'
     )
     parser.add_argument(
-        '--force-refresh', action='store_true',
-        help='Force refresh wiki page with all recent actions from database'
+        '--force-modlog', action='store_true',
+        help='Fetch ALL modlog actions from Reddit API and completely rebuild wiki from database'
     )
     parser.add_argument(
-        '--force', action='store_true',
-        help='Force update wiki page even if content hash matches (note: use --force if same content needs to be pushed)'
+        '--force-wiki', action='store_true', 
+        help='Force wiki page update even if content appears unchanged (bypasses hash check)'
+    )
+    parser.add_argument(
+        '--force-all', action='store_true',
+        help='Equivalent to --force-modlog + --force-wiki (complete rebuild and force update)'
     )
     
     return parser
@@ -1226,8 +1230,14 @@ def main():
                 logger.warning("⚠ Connected but no modlog entries found")
             return
         
-        if args.force_refresh:
-            logger.info("Force refresh requested - fetching all modlog actions and rebuilding wiki...")
+        # Handle force commands
+        if args.force_all:
+            args.force_modlog = True
+            args.force_wiki = True
+            logger.info("Force all requested - will fetch from Reddit AND force wiki update")
+        
+        if args.force_modlog:
+            logger.info("Force modlog requested - fetching ALL modlog actions from Reddit and rebuilding wiki...")
             # First, fetch all recent modlog actions to populate database
             logger.info("Step 1: Fetching all modlog actions from Reddit...")
             process_modlog_actions(reddit, config)
@@ -1240,7 +1250,7 @@ def main():
                 content = build_wiki_content(actions, config)
                 wiki_page = config.get('wiki_page', 'modlog')
                 update_wiki_page(reddit, config['source_subreddit'], wiki_page, content, force=True)
-                logger.info("Wiki page force refresh completed")
+                logger.info("Wiki page completely rebuilt from database")
             else:
                 logger.warning("No removal actions found in database for wiki refresh")
             return
@@ -1252,12 +1262,12 @@ def main():
             logger.info(f"Found {len(actions)} new actions to process")
             content = build_wiki_content(actions, config)
             wiki_page = config.get('wiki_page', 'modlog')
-            update_wiki_page(reddit, config['source_subreddit'], wiki_page, content, force=args.force)
+            update_wiki_page(reddit, config['source_subreddit'], wiki_page, content, force=args.force_wiki)
         
         cleanup_old_entries(config.get('retention_days', CONFIG_LIMITS['retention_days']['default']))
         
         if args.continuous:
-            run_continuous_mode(reddit, config, force=args.force)
+            run_continuous_mode(reddit, config, force=args.force_wiki)
         else:
             logger.info("Single run completed")
     

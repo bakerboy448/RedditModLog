@@ -144,6 +144,38 @@ Options:
   --debug                  Enable debug logging
   --test                   Run a test and exit
   --continuous             Run continuously
+  --force-modlog           Fetch ALL actions from Reddit API and rebuild wiki
+  --force-wiki             Update wiki even if content appears unchanged
+  --force-all              Do both --force-modlog and --force-wiki
+```
+
+### Force Commands Explained
+
+**--force-modlog**: Complete rebuild from Reddit
+- Fetches ALL recent modlog actions from Reddit API 
+- Stores them in database
+- Rebuilds entire wiki page from database
+- Use when: Starting fresh, major updates, or troubleshooting
+
+**--force-wiki**: Force wiki update only
+- Uses existing database data
+- Forces wiki update even if content hash matches
+- Use when: Format changes, modmail updates, or cache issues
+
+**--force-all**: Complete refresh (replaces old --force)
+- Combines both --force-modlog and --force-wiki
+- Fetches from Reddit AND forces wiki update
+- Use when: Major changes, troubleshooting, or unsure which force to use
+
+```bash
+# Complete rebuild from Reddit API
+python modlog_wiki_publisher.py --source-subreddit usenet --force-modlog
+
+# Update wiki with current database data (bypass cache)  
+python modlog_wiki_publisher.py --source-subreddit usenet --force-wiki
+
+# Do both (equivalent to old --force)
+python modlog_wiki_publisher.py --source-subreddit usenet --force-all
 ```
 
 ## Database
