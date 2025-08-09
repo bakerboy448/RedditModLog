@@ -586,7 +586,7 @@ def cleanup_old_entries(retention_days: int):
     except Exception as e:
         logger.error(f"Error during cleanup: {e}")
 
-def get_recent_actions_from_db(config: Dict[str, Any], force_all_actions: bool = False, force_removal_only: bool = False) -> List:
+def get_recent_actions_from_db(config: Dict[str, Any], force_all_actions: bool = False, show_only_removals: bool = True) -> List:
     """Fetch recent actions from database for force refresh"""
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -598,7 +598,7 @@ def get_recent_actions_from_db(config: Dict[str, Any], force_all_actions: bool =
             cursor.execute("SELECT DISTINCT action_type FROM processed_actions WHERE action_type IS NOT NULL")
             wiki_actions = set(row[0] for row in cursor.fetchall())
             logger.info(f"Force refresh: including all action types: {wiki_actions}")
-        elif force_removal_only:
+        elif show_only_removals:
             wiki_actions = set([
                 'removelink', 'removecomment', 'addremovalreason', 'spamlink', 'spamcomment'
             ])
