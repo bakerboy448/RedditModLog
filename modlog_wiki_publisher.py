@@ -679,7 +679,8 @@ def get_recent_actions_from_db(config: Dict[str, Any], force_all_actions: bool =
         return []
 
 def format_content_link(action) -> str:
-    """Format content link for wiki table"""
+    """Format content link for wiki table - only link to actual content, never users"""
+    # Get the title
     if hasattr(action, 'target_title') and action.target_title:
         title = action.target_title
     elif hasattr(action, 'target_author') and action.target_author:
@@ -691,15 +692,19 @@ def format_content_link(action) -> str:
     else:
         title = "Unknown content"
     
-    # Use the actual target_permalink from Reddit API, like main branch
+    # Get permalink - but ONLY if it's actual content, not a user profile
+    permalink = None
     if hasattr(action, 'target_permalink_cached') and action.target_permalink_cached:
         permalink = action.target_permalink_cached
     elif hasattr(action, 'target_permalink') and action.target_permalink:
-        permalink = f"https://www.reddit.com{action.target_permalink}"
-    else:
-        return title
+        permalink = action.target_permalink if action.target_permalink.startswith('http') else f"https://www.reddit.com{action.target_permalink}"
     
-    return f"[{title}]({permalink})"
+    # Only create a link if the permalink points to actual content (/comments/), not user profiles (/u/)
+    if permalink and '/comments/' in permalink and '/u/' not in permalink:
+        return f"[{title}]({permalink})"
+    else:
+        # No link if we don't have actual content URL - just show title
+        return title
 
 def extract_content_id_from_permalink(permalink):
     """Extract the actual post/comment ID from Reddit permalink URL"""
@@ -722,19 +727,46 @@ def extract_content_id_from_permalink(permalink):
 def format_modlog_entry(action, config: Dict[str, Any]) -> Dict[str, str]:
     """Format modlog entry with content ID for tracking"""
     
-    # Extract the actual content ID from permalink
-    permalink = None
-    if hasattr(action, 'target_permalink_cached') and action.target_permalink_cached:
-        permalink = action.target_permalink_cached
-    elif hasattr(action, 'target_permalink') and action.target_permalink:
-        permalink = action.target_permalink if action.target_permalink.startswith('http') else f"https://www.reddit.com{action.target_permalink}"
+    # Try to get the actual Reddit content ID from the action itself first
+    display_id = None
     
-    # Use the extracted content ID as display_id
-    if permalink:
-        content_id = extract_content_id_from_permalink(permalink)
-        display_id = content_id if content_id else generate_display_id(action)
-    else:
-        display_id = generate_display_id(action)
+    # Priority 1: Try to get actual post/comment IDs from Reddit objects
+    if hasattr(action, 'target_submission') and action.target_submission:
+        if hasattr(action.target_submission, 'id'):
+            display_id = f"t3_{action.target_submission.id}"
+        else:
+            # Sometimes it's a string representation
+            sub_str = str(action.target_submission)
+            if sub_str.startswith('t3_'):
+                display_id = sub_str
+            elif len(sub_str) > 3:  # Likely just the ID
+                display_id = f"t3_{sub_str}"
+    elif hasattr(action, 'target_comment') and action.target_comment:
+        if hasattr(action.target_comment, 'id'):
+            display_id = f"t1_{action.target_comment.id}"
+        else:
+            # Sometimes it's a string representation
+            comm_str = str(action.target_comment)
+            if comm_str.startswith('t1_'):
+                display_id = comm_str
+            elif len(comm_str) > 3:  # Likely just the ID
+                display_id = f"t1_{comm_str}"
+    
+    # Priority 2: Try to extract from permalink
+    if not display_id:
+        permalink = None
+        if hasattr(action, 'target_permalink_cached') and action.target_permalink_cached:
+            permalink = action.target_permalink_cached
+        elif hasattr(action, 'target_permalink') and action.target_permalink:
+            permalink = action.target_permalink if action.target_permalink.startswith('http') else f"https://www.reddit.com{action.target_permalink}"
+        
+        if permalink:
+            content_id = extract_content_id_from_permalink(permalink)
+            display_id = content_id if content_id else None
+    
+    # Priority 3: If no content ID available, show empty (so removals can't be linked)
+    if not display_id:
+        display_id = "-"  # No linkable content ID available
     
     # Handle removal reasons properly - check for numeric reasons
     reason_text = "No reason"
