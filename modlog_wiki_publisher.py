@@ -317,6 +317,12 @@ def sanitize_for_markdown(text: str) -> str:
         return ""
     return str(text).replace("|", " ")
 
+def get_config_with_default(config: Dict[str, Any], key: str) -> Any:
+    """Get config value with fallback to CONFIG_LIMITS default"""
+    if key not in CONFIG_LIMITS:
+        raise ValueError(f"Unknown config key: {key}")
+    return config.get(key, CONFIG_LIMITS[key]['default'])
+
 def get_action_datetime(action):
     """Convert action.created_utc to datetime object regardless of input type"""
     if isinstance(action.created_utc, (int, float)):
@@ -571,7 +577,7 @@ def update_missing_subreddits():
 def cleanup_old_entries(retention_days: int):
     """Remove entries older than retention_days"""
     if retention_days <= 0:
-        retention_days = CONFIG_LIMITS['retention_days']['default']
+        retention_days = CONFIG_LIMITS['retention_days']['default']  # No config object available here
     
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -616,11 +622,11 @@ def get_recent_actions_from_db(config: Dict[str, Any], force_all_actions: bool =
             ]))
         
         # Get recent actions within retention period
-        retention_days = config.get('retention_days', CONFIG_LIMITS['retention_days']['default'])
+        retention_days = get_config_with_default(config, 'retention_days')
         cutoff_timestamp = int((datetime.now() - datetime.fromtimestamp(0)).total_seconds()) - (retention_days * 86400)
         
         # Limit to max wiki entries
-        max_entries = config.get('max_wiki_entries_per_page', CONFIG_LIMITS['max_wiki_entries_per_page']['default'])
+        max_entries = get_config_with_default(config, 'max_wiki_entries_per_page')
         
         placeholders = ','.join(['?'] * len(wiki_actions))
         # STRICT subreddit filtering - only exact matches, no nulls
@@ -874,7 +880,7 @@ def build_wiki_content(actions: List, config: Dict[str, Any]) -> str:
         raise ValueError(f"Cannot build wiki content - mixed subreddit data detected: {mixed_subreddits}")
     
     # Enforce wiki entry limits
-    max_entries = config.get('max_wiki_entries_per_page', CONFIG_LIMITS['max_wiki_entries_per_page']['default'])
+    max_entries = get_config_with_default(config, 'max_wiki_entries_per_page')
     if len(actions) > max_entries:
         logger.warning(f"Truncating wiki content to {max_entries} entries (was {len(actions)})")
         actions = actions[:max_entries]
@@ -1165,7 +1171,7 @@ def run_continuous_mode(reddit, config: Dict[str, Any], force: bool = False):
     logger.info("Starting continuous mode...")
     
     error_count = 0
-    max_errors = config.get('max_continuous_errors', CONFIG_LIMITS['max_continuous_errors']['default'])
+    max_errors = get_config_with_default(config, 'max_continuous_errors')
     first_run_force = force
     
     while True:
@@ -1179,10 +1185,10 @@ def run_continuous_mode(reddit, config: Dict[str, Any], force: bool = False):
                 update_wiki_page(reddit, config['source_subreddit'], wiki_page, content, force=first_run_force)
                 first_run_force = False
             
-            cleanup_old_entries(config.get('retention_days', CONFIG_LIMITS['retention_days']['default']))
+            cleanup_old_entries(get_config_with_default(config, 'retention_days'))
             
             interval = validate_config_value('update_interval', 
-                                           config.get('update_interval', CONFIG_LIMITS['update_interval']['default']), 
+                                           get_config_with_default(config, 'update_interval'), 
                                            CONFIG_LIMITS)
             logger.info(f"Waiting {interval} seconds until next update...")
             time.sleep(interval)
@@ -1297,7 +1303,7 @@ def main():
             wiki_page = config.get('wiki_page', 'modlog')
             update_wiki_page(reddit, config['source_subreddit'], wiki_page, content, force=args.force_wiki)
         
-        cleanup_old_entries(config.get('retention_days', CONFIG_LIMITS['retention_days']['default']))
+        cleanup_old_entries(get_config_with_default(config, 'retention_days'))
         
         if args.continuous:
             run_continuous_mode(reddit, config, force=args.force_wiki)
