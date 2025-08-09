@@ -16,11 +16,11 @@ This is a Python-based Reddit moderation log publisher that automatically scrape
 
 ## Development Commands
 
+**IMPORTANT**: Always use `/opt/.venv/redditbot/bin/python` for all Python commands in this project.
+
 ### Setup and Dependencies
 ```bash
-# Install dependencies
-pip install praw
-
+# Dependencies are pre-installed in the venv
 # Copy template config (required for first run)
 cp config_template.json config.json
 ```
@@ -28,16 +28,19 @@ cp config_template.json config.json
 ### Running the Application
 ```bash
 # Test connection and configuration
-python modlog_wiki_publisher.py --test
+/opt/.venv/redditbot/bin/python modlog_wiki_publisher.py --test
 
 # Single run
-python modlog_wiki_publisher.py --source-subreddit SUBREDDIT_NAME
+/opt/.venv/redditbot/bin/python modlog_wiki_publisher.py --source-subreddit SUBREDDIT_NAME
 
 # Continuous daemon mode
-python modlog_wiki_publisher.py --source-subreddit SUBREDDIT_NAME --continuous
+/opt/.venv/redditbot/bin/python modlog_wiki_publisher.py --source-subreddit SUBREDDIT_NAME --continuous
+
+# Force wiki update only (using existing database data)
+/opt/.venv/redditbot/bin/python modlog_wiki_publisher.py --source-subreddit SUBREDDIT_NAME --force-wiki
 
 # Debug authentication issues
-python debug_auth.py
+/opt/.venv/redditbot/bin/python debug_auth.py
 ```
 
 ### Database Operations
@@ -59,26 +62,25 @@ sqlite3 modlog.db "DELETE FROM processed_actions WHERE created_at < date('now', 
 
 The application supports both JSON config files and CLI arguments (CLI overrides JSON):
 
+### Core Options
 - `--source-subreddit`: Target subreddit for reading/writing logs
 - `--wiki-page`: Wiki page name (default: "modlog")
 - `--retention-days`: Database cleanup period (default: 30)
 - `--batch-size`: Entries fetched per run (default: 100)
 - `--interval`: Seconds between updates in daemon mode (default: 300)
 - `--debug`: Enable verbose logging
+
+### Display Options
 - `anonymize_moderators`: Whether to show "HumanModerator" for human mods (default: true)
+  - `true` (default): Shows "AutoMod", "Reddit", or "HumanModerator"
+  - `false`: Shows actual moderator usernames
 
-### Configuration Options
-
-**Moderator Display (`anonymize_moderators`)**:
-- `true` (default): Shows "AutoMod", "Reddit", or "HumanModerator"
-- `false`: Shows actual moderator usernames
-
-**Database Storage**:
-- All moderator names are stored as actual usernames in the database regardless of display setting
-- Removal reasons from the Reddit API are stored in the `removal_reason` column with intelligent text/number handling
-- Target authors are stored in the `target_author` column for proper content attribution
-- Multi-subreddit support with `subreddit` column for data separation
-- Content IDs are extracted from permalinks and stored for tracking
+### Database Features
+- **Multi-subreddit support**: Single database handles multiple subreddits safely
+- **Removal reason storage**: Full text/number handling from Reddit API
+- **Target author tracking**: Actual usernames stored and displayed
+- **Content ID extraction**: Unique IDs from permalinks for precise tracking
+- **Data separation**: Subreddit column prevents cross-contamination
 
 ## Authentication Requirements
 
@@ -111,50 +113,59 @@ User profile links are a privacy concern and not useful for modlog purposes.
 
 ## Recent Improvements (v2.1)
 
-**Multi-Subreddit Database Support**:
+### Multi-Subreddit Database Support
 - ✅ Fixed critical error that prevented multi-subreddit databases from working
 - ✅ Single database now safely handles multiple subreddits with proper data separation
 - ✅ Per-subreddit wiki updates without cross-contamination
 - ✅ Subreddit-specific logging and error handling
 
-**Removal Reason Transparency**:
+### Removal Reason Transparency
 - ✅ Fixed "Removal reason applied" showing instead of actual text
 - ✅ Full transparency - shows ALL available removal reason data including template numbers
 - ✅ Consistent handling between storage and display logic using correct Reddit API fields
 - ✅ Displays actual removal reasons like "Invites - No asking", "This comment has been filtered due to crowd control"
 
-**Unique Content ID Tracking**:
+### Unique Content ID Tracking
 - ✅ Fixed duplicate IDs in markdown tables where all comments showed same post ID
 - ✅ Comments now show unique comment IDs (e.g., "n7ravg2") for precise tracking
 - ✅ Posts show post IDs for clear content identification
 - ✅ Each modlog entry has a unique identifier for easy reference
 
-**Content Linking and Display**:
+### Content Linking and Display
 - ✅ Content links point to actual Reddit posts/comments, never user profiles for privacy
 - ✅ Fixed target authors showing as [deleted] - now displays actual usernames  
 - ✅ Proper content titles extracted from Reddit API data
 - ✅ AutoModerator displays as "AutoModerator" (not anonymized)
 - ✅ Configurable anonymization for human moderators
 
-**Data Integrity**:
+### Data Integrity
 - ✅ Pipe character escaping for markdown table compatibility
 - ✅ Robust error handling for mixed subreddit scenarios  
 - ✅ Database schema at version 5 with all required columns
 - ✅ Consistent Reddit API field usage (action.details vs action.description)
 
+## Development Guidelines
+
+### Git Workflow
+- If branch is not main, you may commit and push if a PR is draft or not open
+- Use conventional commits for all changes
+- Use multiple commits if needed, or patch if easier
+- Always update CLAUDE.md and README.md when making changes
+
+### Code Standards
+- Always escape markdown table values like removal reasons for pipes
+- Store pipe-free data in database to prevent markdown issues
+- Confirm cache file of wiki page and warn if same, interactively ask to force refresh
+- Always use the specified virtual environment path
+
+### Documentation
+- Always update commands and flags in documentation
+- Remove CHANGELOG from CLAUDE.md (keep separate)
+- Create and update changelog based on git tags (should be scripted)
+
 ## Common Issues
 
-- 401 errors: Check app type is "script" and verify client_id/client_secret
-- Wiki permission denied: Ensure bot has moderator or wiki contributor access
-- Rate limiting: Increase `--interval` and/or reduce `--batch-size`
-- always update CLAUDE.md and README.md
-- if branch is not main then you may commit and push if a PR is draft or not open
-- always update commands and flags
-- if an .venv has been told to use, remember it
-- always remove CHANGELOG from CLAUDE.md
-- always create and update a changelog. this should be scripted and based on a git tag?
-- always use conventional commits
-- use multiple commits if needed. you may patch if easier, do this automatically
-- rewrite this file to be more organized
-- always escape markdown table values like removal reasons for pipes; just do this in the database, no pipes
-- confirm the cache file of wiki page and ensure warn if the the same interfactively ask to force refresh
+- **401 errors**: Check app type is "script" and verify client_id/client_secret
+- **Wiki permission denied**: Ensure bot has moderator or wiki contributor access
+- **Rate limiting**: Increase `--interval` and/or reduce `--batch-size`
+- **Module not found**: Always use `/opt/.venv/redditbot/bin/python` instead of system python
