@@ -733,15 +733,15 @@ def extract_content_id_from_permalink(permalink):
         return None
     
     import re
-    # Extract post ID from URLs like /comments/abc123/ or https://reddit.com/comments/abc123/
-    post_match = re.search(r'/comments/([a-zA-Z0-9]+)/', permalink)
-    if post_match:
-        return f"t3_{post_match.group(1)}"
-    
-    # Extract comment ID from URLs like /comments/abc123/comment/def456/
+    # Check for comment ID first - URLs like /comments/abc123/title/def456/
     comment_match = re.search(r'/comments/[a-zA-Z0-9]+/[^/]*/([a-zA-Z0-9]+)/?', permalink)
     if comment_match:
         return f"t1_{comment_match.group(1)}"
+    
+    # Extract post ID from URLs like /comments/abc123/ (only if no comment ID found)
+    post_match = re.search(r'/comments/([a-zA-Z0-9]+)/', permalink)
+    if post_match:
+        return f"t3_{post_match.group(1)}"
     
     return None
 
@@ -755,8 +755,8 @@ def format_modlog_entry(action, config: Dict[str, Any]) -> Dict[str, str]:
     parsed_mod_note = ''
     if hasattr(action, 'mod_note') and action.mod_note:
         parsed_mod_note = str(action.mod_note).strip()
-    elif hasattr(action, 'description') and action.description:
-        parsed_mod_note = str(action.description).strip()
+    elif hasattr(action, 'details') and action.details:
+        parsed_mod_note = str(action.details).strip()
     
     # Process details like main branch
     if hasattr(action, 'details') and action.details:
