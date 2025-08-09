@@ -73,16 +73,27 @@ Create `config.json`:
 
 ### Configurable via CLI
 
-| CLI Option           | JSON Key           | Description                            | Default       |
-| -------------------- | ------------------ | -------------------------------------- | ------------- |
-| `--source-subreddit` | `source_subreddit` | Subreddit to read and write logs       | required      |
-| `--wiki-page`        | `wiki_page`        | Wiki page name                         | `modlog`      |
-| `--retention-days`   | `retention_days`   | Keep entries this many days            | `30`          |
-| `--batch-size`       | `batch_size`       | Entries to fetch per run               | `100`         |
-| `--interval`         | `update_interval`  | Seconds between updates in daemon mode | `300`         |
-| `--config`           | –                  | Path to config file                    | `config.json` |
+| CLI Option | JSON Key | Description | Default | Min | Max |
+|------------|----------|-------------|---------|-----|-----|
+| `--source-subreddit` | `source_subreddit` | Subreddit to read and write logs | required | - | - |
+| `--wiki-page` | `wiki_page` | Wiki page name | modlog | - | - |
+| `--retention-days` | `retention_days` | Keep entries this many days | 90 | 1 | 365 |
+| `--batch-size` | `batch_size` | Entries to fetch per run | 50 | 10 | 500 |
+| `--interval` | `update_interval` | Seconds between updates in daemon mode | 600 | 60 | 3600 |
+| `--config` | – | Path to config file | config.json | - | - |
+| `--debug` | – | Enable verbose output | false | - | - |
+| `--show-config-limits` | – | Show configuration limits and defaults | false | - | - |
+| `--force-migrate` | – | Force database migration | false | - | - |
 
 CLI values override config file values.
+
+## Configuration Limits
+
+All configuration values are automatically validated and enforced within safe limits. Use `--show-config-limits` to see current limits and defaults.
+
+## Database Migration
+
+The database will automatically migrate to the latest schema version on startup. Use `--force-migrate` to manually trigger migration.
 
 ## Wiki Output
 
@@ -91,9 +102,9 @@ Sample wiki table output:
 ```markdown
 ## 2025-01-15
 
-| Time | Action | Moderator | Content | Reason | Inquire |
-|------|--------|-----------|---------|--------|---------|
-| 14:25:33 UTC | removepost | ModName | [Post Title](url) | spam | [Contact Mods](modmail_url) |
+| Time | Action | ID | Moderator | Content | Reason | Inquire |
+|------|--------|----|-----------|---------|--------|---------|
+| 14:25:33 UTC | removepost | `P1a2b3c` | ModName | [Post Title](url) | spam | [Contact Mods](modmail_url) |
 ```
 
 ## Logging
@@ -131,6 +142,12 @@ Uses `modlog.db` (SQLite) for deduplication and history:
 ```bash
 # View recent actions
 sqlite3 modlog.db "SELECT * FROM processed_actions ORDER BY created_at DESC LIMIT 10;"
+
+# View actions by content ID
+sqlite3 modlog.db "SELECT display_id, action_type, moderator, datetime(created_at, 'unixepoch') FROM processed_actions WHERE display_id = 'P1a2b3c';"
+
+# Track content lifecycle
+sqlite3 modlog.db "SELECT target_id, action_type, moderator, datetime(created_at, 'unixepoch') FROM processed_actions WHERE target_id = '1a2b3c' ORDER BY created_at;"
 
 # Clean manually
 sqlite3 modlog.db "DELETE FROM processed_actions WHERE created_at < date('now', '-30 days');"

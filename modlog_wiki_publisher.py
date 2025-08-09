@@ -3,900 +3,691 @@
 Reddit Modlog Wiki Publisher
 Scrapes moderation logs and publishes them to a subreddit wiki page
 """
-import argparse
-import json
-import logging
-import logging.handlers
-import sqlite3
+import os
 import sys
+import json
+import sqlite3
 import time
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from typing import Dict, List, Optional
-from urllib.parse import quote
+import argparse
+import logging
+import re
+from datetime import datetime, timezone
+from typing import Dict, List, Optional, Any
 
 import praw
 
-# Global logger setup - will be enhanced with per-subreddit loggers
-root_logger = logging.getLogger()
-root_logger.setLevel(logging.INFO)
-
-# Console handler for general output
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
-console_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-console_handler.setFormatter(console_formatter)
-root_logger.addHandler(console_handler)
-
-# Main logger
+DB_PATH = "modlog.db"
+LOGS_DIR = "logs"
 logger = logging.getLogger(__name__)
 
+# Configuration limits and defaults
+CONFIG_LIMITS = {
+    'retention_days': {'min': 1, 'max': 365, 'default': 90},
+    'batch_size': {'min': 10, 'max': 500, 'default': 50},
+    'update_interval': {'min': 60, 'max': 3600, 'default': 600},
+    'max_wiki_entries_per_page': {'min': 100, 'max': 2000, 'default': 1000},
+    'max_continuous_errors': {'min': 1, 'max': 50, 'default': 5},
+    'rate_limit_buffer': {'min': 30, 'max': 300, 'default': 60},
+    'max_batch_retries': {'min': 1, 'max': 10, 'default': 3},
+    'archive_threshold_days': {'min': 1, 'max': 30, 'default': 7}
+}
 
-class ModlogDatabase:
-    """SQLite database for tracking processed actions"""
+# Database schema version
+CURRENT_DB_VERSION = 2
 
-    def __init__(self, db_path: str = "modlog.db", retention_days: int = 30):
-        self.db_path = db_path
-        self.retention_days = retention_days
-        self.conn = None
-        self._init_db()
+def get_db_version():
+    """Get current database schema version"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Check if version table exists
+        cursor.execute("""
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name='schema_version'
+        """)
+        
+        if not cursor.fetchone():
+            conn.close()
+            return 0
+        
+        cursor.execute("SELECT version FROM schema_version ORDER BY id DESC LIMIT 1")
+        result = cursor.fetchone()
+        conn.close()
+        
+        return result[0] if result else 0
+    except Exception as e:
+        logger.warning(f"Could not determine database version: {e}")
+        return 0
 
-    def _init_db(self):
-        """Initialize database and create tables if needed"""
-        self.conn = sqlite3.connect(self.db_path)
-
-        # Create migrations table first
-        self.conn.execute('''
-            CREATE TABLE IF NOT EXISTS schema_migrations (
-                id INTEGER PRIMARY KEY,
-                name TEXT NOT NULL,
-                applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+def set_db_version(version):
+    """Set database schema version"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS schema_version (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                version INTEGER NOT NULL,
+                applied_at INTEGER DEFAULT (strftime('%s', 'now'))
             )
-        ''')
+        """)
+        
+        cursor.execute("INSERT INTO schema_version (version) VALUES (?)", (version,))
+        conn.commit()
+        conn.close()
+        logger.info(f"Database schema version set to {version}")
+    except Exception as e:
+        logger.error(f"Failed to set database version: {e}")
+        raise
 
-        # Check if migration 0 is already applied
-        cursor = self.conn.execute("SELECT 1 FROM schema_migrations WHERE id = 0")
-        if not cursor.fetchone():
-            logger.info("Applying Migration 0: Initial schema")
-            self.conn.execute('''
+def validate_config_value(key, value, config_limits):
+    """Validate and enforce configuration limits"""
+    if key not in config_limits:
+        return value
+    
+    limits = config_limits[key]
+    if value < limits['min']:
+        logger.warning(f"{key} value {value} below minimum {limits['min']}, using minimum")
+        return limits['min']
+    elif value > limits['max']:
+        logger.warning(f"{key} value {value} above maximum {limits['max']}, using maximum")
+        return limits['max']
+    
+    return value
+
+def apply_config_defaults_and_limits(config):
+    """Apply default values and enforce limits on configuration"""
+    for key, limits in CONFIG_LIMITS.items():
+        if key not in config:
+            config[key] = limits['default']
+            logger.info(f"Using default value for {key}: {limits['default']}")
+        else:
+            config[key] = validate_config_value(key, config[key], CONFIG_LIMITS)
+    
+    # Validate required fields
+    required_fields = ['reddit', 'source_subreddit']
+    for field in required_fields:
+        if field not in config:
+            raise ValueError(f"Missing required configuration field: {field}")
+    
+    # Validate reddit credentials
+    reddit_config = config.get('reddit', {})
+    required_reddit_fields = ['client_id', 'client_secret', 'username', 'password']
+    for field in required_reddit_fields:
+        if field not in reddit_config or not reddit_config[field]:
+            raise ValueError(f"Missing required reddit configuration field: {field}")
+    
+    return config
+
+def migrate_database():
+    """Run database migrations to current version"""
+    current_version = get_db_version()
+    target_version = CURRENT_DB_VERSION
+    
+    if current_version >= target_version:
+        logger.info(f"Database already at version {current_version}, no migration needed")
+        return
+    
+    logger.info(f"Migrating database from version {current_version} to {target_version}")
+    
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Migration from version 0 to 1: Initial schema
+        if current_version < 1:
+            logger.info("Applying migration: Initial schema (v0 -> v1)")
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS processed_actions (
-                    action_id TEXT PRIMARY KEY,
-                    action_type TEXT,
-                    timestamp INTEGER,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    action_id TEXT UNIQUE NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    processed_at INTEGER DEFAULT (strftime('%s', 'now'))
                 )
-            ''')
-            self.conn.execute('''
-                CREATE TABLE IF NOT EXISTS modlog_entries (
-                    action_id TEXT PRIMARY KEY,
-                    timestamp INTEGER,
-                    action_type TEXT,
-                    moderator TEXT,
-                    target_author TEXT,
-                    title TEXT,
-                    url TEXT,
-                    removal_reason TEXT,
-                    note TEXT,
-                    modmail_url TEXT,
-                    subreddit TEXT
-                )
-            ''')
-            self.conn.execute('''
-                CREATE INDEX IF NOT EXISTS idx_modlog_timestamp
-                ON modlog_entries(timestamp)
-            ''')
-            self.conn.execute("INSERT INTO schema_migrations (id, name) VALUES (0, 'initial schema')")
-        self.conn.commit()
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_action_id ON processed_actions(action_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_created_at ON processed_actions(created_at)")
+            set_db_version(1)
+        
+        # Migration from version 1 to 2: Add tracking columns
+        if current_version < 2:
+            logger.info("Applying migration: Add tracking columns (v1 -> v2)")
+            
+            # Check if columns already exist to handle partial migrations
+            cursor.execute("PRAGMA table_info(processed_actions)")
+            existing_columns = [row[1] for row in cursor.fetchall()]
+            
+            columns_to_add = [
+                ('action_type', 'TEXT'),
+                ('moderator', 'TEXT'),
+                ('target_id', 'TEXT'),
+                ('target_type', 'TEXT'),
+                ('display_id', 'TEXT'),
+                ('target_permalink', 'TEXT')
+            ]
+            
+            for column_name, column_type in columns_to_add:
+                if column_name not in existing_columns:
+                    try:
+                        cursor.execute(f"ALTER TABLE processed_actions ADD COLUMN {column_name} {column_type}")
+                        logger.info(f"Added column: {column_name}")
+                    except sqlite3.OperationalError as e:
+                        if "duplicate column name" not in str(e):
+                            raise
+            
+            # Add new indexes
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_display_id ON processed_actions(display_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_target_id ON processed_actions(target_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_target_type ON processed_actions(target_type)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_moderator ON processed_actions(moderator)")
+            
+            set_db_version(2)
+        
+        conn.commit()
+        conn.close()
+        logger.info(f"Database migration completed successfully to version {target_version}")
+    
+    except Exception as e:
+        logger.error(f"Database migration failed: {e}")
+        raise
 
-        # Apply migration 1 if not already applied
-        cursor = self.conn.execute("SELECT 1 FROM schema_migrations WHERE id = 1")
-        if not cursor.fetchone():
-            logger.info("Applying Migration 1: Add subreddit column to modlog_entries")
-            try:
-                self.conn.execute("ALTER TABLE modlog_entries ADD COLUMN subreddit TEXT")
-            except sqlite3.OperationalError:
-                pass  # Already exists or failed silently
-            self.conn.execute("INSERT INTO schema_migrations (id, name) VALUES (1, 'add subreddit column')")
-        self.conn.commit()
+def setup_database():
+    """Initialize and migrate database"""
+    try:
+        migrate_database()
+        logger.info("Database setup completed successfully")
+    except Exception as e:
+        logger.error(f"Database setup failed: {e}")
+        raise
 
-        logger.info("Database initialized at %s", self.db_path)
+def extract_target_id(action):
+    """Extract Reddit ID from action target"""
+    if hasattr(action, 'target_submission') and action.target_submission:
+        return action.target_submission.id
+    elif hasattr(action, 'target_comment') and action.target_comment:
+        return action.target_comment.id
+    elif hasattr(action, 'target_author') and action.target_author:
+        return action.target_author.name
+    else:
+        return action.id  # Fallback to action ID
 
-    def store_entry(self, entry: Dict):
-        """Insert or replace a modlog entry record"""
-        self.conn.execute('''
-            INSERT OR REPLACE INTO modlog_entries (
-                action_id, timestamp, action_type, moderator, target_author,
-                title, url, removal_reason, note, modmail_url, subreddit
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            entry['id'],
-            entry['timestamp'],
-            entry['action_type'],
-            entry['moderator'],
-            entry['target_author'],
-            entry['title'],
-            entry['url'],
-            entry['removal_reason'],
-            entry['note'],
-            entry['modmail_url'],
-            entry['subreddit']
-        ))
-        self.conn.commit()
+def get_target_type(action):
+    """Determine target type for ID prefix"""
+    if hasattr(action, 'target_submission') and action.target_submission:
+        return 'post'
+    elif hasattr(action, 'target_comment') and action.target_comment:
+        return 'comment'
+    elif hasattr(action, 'target_author'):
+        return 'user'
+    else:
+        return 'action'
 
-    def get_recent_entries(self, cutoff_timestamp: float, subreddit: Optional[str] = None) -> List[Dict]:
-        """Return all modlog entries newer than the cutoff, optionally filtered by subreddit"""
-        query = '''
-            SELECT action_id, timestamp, action_type, moderator, target_author,
-                   title, url, removal_reason, note, modmail_url
-            FROM modlog_entries
-            WHERE timestamp >= ?
-        '''
-        params = [cutoff_timestamp]
+def generate_display_id(action):
+    """Generate human-readable display ID"""
+    target_id = extract_target_id(action)
+    target_type = get_target_type(action)
+    
+    prefixes = {
+        'post': 'P',
+        'comment': 'C', 
+        'user': 'U',
+        'action': 'A'
+    }
+    
+    prefix = prefixes.get(target_type, 'X')
+    
+    # Shorten long IDs for display
+    if len(str(target_id)) > 8 and target_type in ['post', 'comment']:
+        short_id = str(target_id)[:6]
+        return f"{prefix}{short_id}"
+    else:
+        return f"{prefix}{target_id}"
 
-        if subreddit:
-            query += ' AND subreddit = ?'
-            params.append(subreddit)
+def get_target_permalink(action):
+    """Get permalink for the target content"""
+    try:
+        if hasattr(action, 'target_submission') and action.target_submission:
+            return f"https://reddit.com{action.target_submission.permalink}"
+        elif hasattr(action, 'target_comment') and action.target_comment:
+            return f"https://reddit.com{action.target_comment.permalink}"
+        elif hasattr(action, 'target_author') and action.target_author:
+            return f"https://reddit.com/u/{action.target_author.name}"
+    except:
+        pass
+    return None
 
-        query += ' ORDER BY timestamp DESC'
-
-        cursor = self.conn.execute(query, params)
-        rows = cursor.fetchall()
-        return [
-            {
-                'id': r[0], 'timestamp': r[1], 'action_type': r[2], 'moderator': r[3],
-                'target_author': r[4], 'title': r[5], 'url': r[6],
-                'removal_reason': r[7], 'note': r[8], 'modmail_url': r[9]
-            } for r in rows
-        ]
-
-    def is_processed(self, action_id: str) -> bool:
-        """Check if an action has been processed"""
-        cursor = self.conn.execute(
-            "SELECT 1 FROM processed_actions WHERE action_id = ?",
+def is_duplicate_action(action_id: str) -> bool:
+    """Check if action has already been processed"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        cursor.execute(
+            "SELECT 1 FROM processed_actions WHERE action_id = ? LIMIT 1",
             (action_id,)
         )
-        return cursor.fetchone() is not None
-
-    def mark_processed(self, action_id: str, action_type: str, timestamp: int):
-        """Mark an action as processed"""
-        try:
-            self.conn.execute(
-                "INSERT INTO processed_actions (action_id, action_type, timestamp) VALUES (?, ?, ?)",
-                (action_id, action_type, timestamp)
-            )
-            self.conn.commit()
-        except sqlite3.IntegrityError:
-            # Already exists, ignore
-            pass
-
-    def cleanup_old_entries(self):
-        """Remove entries older than retention period"""
-        cutoff_date = datetime.now() - timedelta(days=self.retention_days)
-        self.conn.execute(
-            "DELETE FROM processed_actions WHERE created_at < ?",
-            (cutoff_date.isoformat(),)
-        )
-        self.conn.execute(
-            "DELETE FROM modlog_entries WHERE timestamp < ?",
-            (cutoff_date.timestamp(),)
-        )
-        self.conn.commit()
-        # Vacuum occasionally to reclaim space
-        if time.time() % 86400 < 300:  # Once per day approximately
-            self.conn.execute("VACUUM")
-
-    def close(self):
-        """Close database connection"""
-        if self.conn:
-            self.conn.close()
-
-
-class ModlogWikiPublisher:
-    """Main class for publishing modlogs to wiki"""
-
-    # Actions that result in content removal
-    REMOVAL_ACTIONS = {
-        'removelink', 'removecomment', 'spamlink', 'spamcomment',
-        'removepost', 'removecontent', 'addremovalreason'
-    }
-
-    # Actions to ignore
-    IGNORED_ACTIONS = {
-        'addnote', 'adjust_post_crowd_control_level', 'approvecomment', 'approvelink',
-        'banuser', 'community_welcome_page', 'community_widgets', 'deleterule',
-        'distinguish', 'edit_comment_requirements', 'edit_post_requirements',
-        'edit_saved_response', 'edited_widget', 'editrule', 'editsettings',
-        'ignorereports', 'lock', 'marknsfw', 'reorderrules', 'setflair', 'spoiler',
-        'sticky', 'unlock', 'unmarknsfw', 'unspoiler', 'unsticky', 'wikirevise',
-        'wikipermlevel', 'wikipagelisted', 'wikipageunlisted', 'createrule', 'editflair',
-        'invitemoderator', 'acceptmoderatorinvite', 'removemoderator', 'rejectmoderatorinvite',
-        'unbanuser', 'setsuggestedsort', 'muteuser', 'submit_scheduled_post'
-    }
-
-    # Action groupings for statistics
-    ACTION_GROUPS = {
-        'spam': ['spamlink', 'spamcomment'],
-        'remove': ['removelink', 'removecomment', 'removepost', 'removecontent'],
-        'reason': ['addremovalreason'],
-    }
-
-    def __init__(self, config_path: str = "config.json", cli_args: Optional[argparse.Namespace] = None):
-        self.config = self._load_config(config_path, cli_args or argparse.Namespace())
-        self._validate_config(self.config)
-        self.reddit = self._init_reddit()
-        self.db = ModlogDatabase(retention_days=self.config.get('retention_days', 30))
-        self.wiki_char_limit = 524288
-        self.batch_size = self.config.get('batch_size', 100)
-        self.subreddit_loggers = {}
-        self._setup_subreddit_logging()
-
-    def _load_config(self, config_path: str, cli_args: argparse.Namespace) -> dict:
-        """Load JSON config, then override with CLI args"""
-        config = {}
-        try:
-            with open(config_path, 'r') as f:
-                config = json.load(f)
-        except FileNotFoundError:
-            logger.warning("No config file found at %s, using CLI only", config_path)
-        except json.JSONDecodeError as e:
-            logger.error("Invalid JSON in config: %s", e)
-            sys.exit(1)
         
-        # CLI overrides
-        if hasattr(cli_args, 'source_subreddit') and cli_args.source_subreddit:
-            config['source_subreddit'] = cli_args.source_subreddit
-        if hasattr(cli_args, 'wiki_page') and cli_args.wiki_page:
-            config['wiki_page'] = cli_args.wiki_page
-        if hasattr(cli_args, 'retention_days') and cli_args.retention_days is not None:
-            config['retention_days'] = cli_args.retention_days
-        if hasattr(cli_args, 'batch_size') and cli_args.batch_size is not None:
-            config['batch_size'] = cli_args.batch_size
-        if hasattr(cli_args, 'interval') and cli_args.interval is not None:
-            config['update_interval'] = cli_args.interval
-        if 'target_subreddit' not in config:
-            config['target_subreddit'] = config.get('source_subreddit')
-        return config
-
-    def _validate_config(self, config: dict) -> None:
-        """Validate configuration has required fields"""
-        required = ['reddit', 'source_subreddit']
-        reddit_required = ['client_id', 'client_secret', 'username', 'password']
-        
-        for field in required:
-            if field not in config:
-                raise ValueError(f"Missing required config field: {field}")
-        
-        if 'reddit' in config:
-            for field in reddit_required:
-                if field not in config['reddit']:
-                    raise ValueError(f"Missing required reddit config: {field}")
-        
-        # Validate retention_days is reasonable
-        retention = config.get('retention_days', 30)
-        if not 1 <= retention <= 365:
-            logger.warning("Unusual retention_days: %s, using 30", retention)
-            config['retention_days'] = 30
-
-    def _setup_subreddit_logging(self):
-        """Setup per-subreddit logging with rotation"""
-        # Create logs directory if it doesn't exist
-        log_dir = Path(self.config.get('log_directory', 'logs'))
-        log_dir.mkdir(exist_ok=True)
-        
-        # Get subreddits to set up logging for
-        subreddits = [self.config['source_subreddit']]
-        if 'target_subreddit' in self.config and self.config['target_subreddit'] != self.config['source_subreddit']:
-            subreddits.append(self.config['target_subreddit'])
-        
-        for subreddit in subreddits:
-            # Create logger for this subreddit
-            sub_logger = logging.getLogger(f"modlog.{subreddit}")
-            sub_logger.setLevel(logging.DEBUG)  # Let handlers control level
-            
-            # Prevent adding handlers multiple times
-            if sub_logger.handlers:
-                continue
-                
-            # Create rotating file handler
-            log_file = log_dir / f"{subreddit}_modlog.log"
-            file_handler = logging.handlers.RotatingFileHandler(
-                log_file,
-                maxBytes=self.config.get('log_max_bytes', 10 * 1024 * 1024),  # 10MB default
-                backupCount=self.config.get('log_backup_count', 5),  # Keep 5 backups
-                encoding='utf-8'
-            )
-            
-            # Create formatter for subreddit logs
-            file_formatter = logging.Formatter(
-                '%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s'
-            )
-            file_handler.setFormatter(file_formatter)
-            file_handler.setLevel(logging.DEBUG)
-            
-            # Add handler to logger
-            sub_logger.addHandler(file_handler)
-            
-            # Store reference
-            self.subreddit_loggers[subreddit] = sub_logger
-            
-            logger.info("Setup logging for subreddit: %s -> %s", subreddit, log_file)
-    
-    def get_subreddit_logger(self, subreddit: str) -> logging.Logger:
-        """Get logger for specific subreddit"""
-        return self.subreddit_loggers.get(subreddit, logger)
-
-    def _init_reddit(self) -> praw.Reddit:
-        """Initialize Reddit API connection"""
-        reddit_config = self.config['reddit']
-
-        # Add debug logging
-        logger.debug("Attempting login with username: %s", reddit_config['username'])
-        logger.debug("Client ID: %s...", reddit_config['client_id'][:4])  # Show first 4 chars
-
-        try:
-            reddit = praw.Reddit(
-                client_id=reddit_config['client_id'],
-                client_secret=reddit_config['client_secret'],
-                username=reddit_config['username'],
-                password=reddit_config['password'],
-                user_agent=f"ModlogWikiPublisher/1.0 by /u/{reddit_config['username']}"
-            )
-
-            # Force authentication test
-            me = reddit.user.me()
-            logger.info("Successfully authenticated as: %s", me.name)
-            return reddit
-
-        except Exception as e:
-            logger.error("Authentication failed: %s", e)
-            logger.error("Error type: %s", type(e).__name__)
-            if hasattr(e, 'response'):
-                logger.error("Response status: %s", e.response.status_code)
-                logger.error("Response body: %s", e.response.text)
-            raise
-
-    def test_connection(self) -> bool:
-        """Test Reddit connection and permissions"""
-        print("\n" + "="*50)
-        print("Testing Reddit API Connection")
-        print("="*50)
-
-        try:
-            # Test authentication with detailed error catching
-            try:
-                me = self.reddit.user.me()
-                print(f"✓ Authenticated as: /u/{me.name}")
-            except Exception as auth_error:
-                print(f"❌ Authentication failed: {auth_error}")
-                if hasattr(auth_error, 'response'):
-                    print(f"   Status Code: {auth_error.response.status_code}")
-                    print(f"   Response: {auth_error.response.text}")
-                if '401' in str(auth_error):
-                    print("\nCommon 401 causes:")
-                    print("  - Incorrect client_id or client_secret")
-                    print("  - Wrong username or password")
-                    print("  - 2FA enabled (need app-specific password)")
-                    print("  - Spaces/quotes in credentials")
-                return False
-
-            # Test subreddit access
-            source_sub = self.reddit.subreddit(self.config['source_subreddit'])
-            _ = source_sub.created_utc
-            print(f"✓ Source subreddit exists: /r/{self.config['source_subreddit']}")
-
-            # Check moderator status
-            is_mod = False
-            try:
-                for mod in source_sub.moderator():
-                    if mod.name.lower() == self.config['reddit']['username'].lower():
-                        is_mod = True
-                        break
-            except:
-                pass
-
-            if is_mod:
-                print(f"✓ User is moderator of /r/{self.config['source_subreddit']}")
-            else:
-                print(f"⚠ User is NOT moderator of /r/{self.config['source_subreddit']}")
-                print("  You need moderator access to read modlogs")
-                return False
-
-            # Test modlog access
-            try:
-                log_entry = next(source_sub.mod.log(limit=1), None)
-                if log_entry:
-                    print(f"✓ Can read modlog (latest action: {log_entry.action})")
-                else:
-                    print("⚠ No modlog entries found (might be empty)")
-            except Exception as e:
-                print(f"❌ Cannot read modlog: {e}")
-                return False
-
-            # Test wiki access
-            target_sub = self.reddit.subreddit(self.config['target_subreddit'])
-            wiki_page = self.config['wiki_page']
-
-            try:
-                page = target_sub.wiki[wiki_page]
-                content = page.content_md
-                print(f"✓ Wiki page exists: /r/{self.config['target_subreddit']}/wiki/{wiki_page}")
-                print(f"  Current size: {len(content)} characters")
-            except:
-                print(f"⚠ Wiki page doesn't exist yet: /r/{self.config['target_subreddit']}/wiki/{wiki_page}")
-                print("  It will be created on first run")
-
-            print("\n✓ All tests passed!")
-            return True
-
-        except Exception as e:
-            print(f"❌ Connection test failed: {e}")
-            return False
-
-    def sanitize_for_table(self, text: str) -> str:
-        """Sanitize text for markdown table display"""
-        if not text:
-            return ''
-        # Replace pipes with similar Unicode character and clean whitespace
-        return text.replace('|', '┃').strip()
-
-    def get_action_group(self, action_type: str) -> str:
-        """Get the group name for an action type"""
-        for group, actions in self.ACTION_GROUPS.items():
-            if action_type in actions:
-                return group
-        return 'other'
-
-    def _format_timestamp(self, timestamp: float) -> str:
-        """Format timestamp as HH:MM:SS UTC"""
-        dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
-        return dt.strftime("%H:%M:%S UTC")
-
-    def _format_date(self, timestamp: float) -> str:
-        """Format timestamp as YYYY-MM-DD"""
-        dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
-        return dt.strftime("%Y-%m-%d")
-
-    def _generate_modmail_url(self, subreddit: str, action_type: str, title: str, url: str) -> str:
-        """Generate pre-populated modmail URL"""
-        # Determine removal type
-        type_map = {
-            'removelink': 'Post',
-            'removepost': 'Post',
-            'removecomment': 'Comment',
-            'spamlink': 'Spam Post',
-            'spamcomment': 'Spam Comment',
-            'removecontent': 'Content',
-            'addremovalreason': 'Removal Reason',
-        }
-        removal_type = type_map.get(action_type, 'Content')
-
-        # Truncate title if too long
-        max_title_length = 50
-        if len(title) > max_title_length:
-            title = title[:max_title_length-3] + "..."
-
-        # Create subject line
-        subject = f"{removal_type} Removal Inquiry - {title}"
-        body = (
-            f"Hello Moderators of /r/{subreddit},\n\n"
-            f"I would like to inquire about the recent removal of the following {removal_type.lower()}:\n\n"
-            f"**Title:** {title}\n\n"
-            f"**Action Type:** {action_type}\n\n"
-            f"**Link:** {url}\n\n"
-            "Please provide details regarding this action.\n\n"
-            "Thank you!"
-        )
-
-        # Generate modmail URL
-        url = f"https://www.reddit.com/message/compose?to=/r/{subreddit}&subject={quote(subject)}&message={quote(body)}"
-        return url
-
-    def _process_modlog_entry(self, entry) -> Optional[Dict]:
-        """Process a single modlog entry"""
-        action_type = entry.action
-
-        # Skip ignored actions
-        if action_type in self.IGNORED_ACTIONS:
-            logger.debug("Ignoring action: [%s] for entry %s by %s", action_type, entry.id, entry.mod.name)
-            return None
-        
-        # Skip ignored moderators
-        ignored_mods = self.config.get('ignored_moderators', [])
-        if entry.mod.name in ignored_mods:
-            logger.debug("Ignoring action by ignored moderator: [%s] for entry %s", entry.mod.name, entry.id)
-            return None
-
-        # Check if already processed
-        action_id = f"{entry.id}_{entry.created_utc}"
-        if self.db.is_processed(action_id):
-            return None
-        
-        # Debug logging for non-removal actions
-        if action_type not in self.REMOVAL_ACTIONS:
-            logger.debug('Processing non-removal action: [%s] for entry %s by %s', action_type, entry.id, entry.mod.name)
-            logger.debug("Entry details: %s", entry.details)
-            logger.debug("Entry target author: %s", entry.target_author)
-            logger.debug("Entry target title: %s", entry.target_title)
-            logger.debug("Entry target permalink: %s", entry.target_permalink)
-        
-        # Get Mod Note
-        parsed_mod_note = ''
-        if hasattr(entry, 'mod_note') and entry.mod_note:
-            parsed_mod_note = entry.mod_note.strip()
-        elif hasattr(entry, 'description') and entry.description:
-            parsed_mod_note = entry.description.strip()
-        
-        # Process moderator name (FIXED BUG: using elif)
-        p_mod_name = ''
-        entry_mod = ''
-        if hasattr(entry, 'mod') and entry.mod:
-            entry_mod = entry.mod.name.strip()
-        
-        if entry_mod:
-            if entry_mod == '[deleted]':
-                p_mod_name = '[deletedHumanModerator]'
-            elif entry_mod == 'AutoModerator':
-                p_mod_name = 'AutoModerator'
-            elif entry_mod == 'reddit':
-                p_mod_name = 'reddit'
-            else:
-                p_mod_name = 'HumanModerator'
-        
-        # Process details
-        p_details = ''
-        if entry.details:
-            p_details = entry.details.strip()
-            if action_type in ['addremovalreason']:
-                p_details = parsed_mod_note.strip()
-        
-        # Check if comment (improved detection)
-        is_comment = bool(entry.target_permalink and '/comments/' in entry.target_permalink 
-                         and entry.target_permalink.count('/') > 6)
-        
-        # Determine Title for Wiki
-        formatted_title = ''
-        if is_comment and entry.target_title:
-            formatted_title = entry.target_title
-        elif is_comment and not entry.target_title:
-            formatted_title = f"Comment by u/{entry.target_author if entry.target_author else '[deleted]'}"
-        elif not is_comment and entry.target_title:
-            formatted_title = entry.target_title
-        elif not is_comment and not entry.target_title:
-            formatted_title = f"Post by u/{entry.target_author if entry.target_author else '[deleted]'}"
-        else:
-            formatted_title = 'UnknownTitle'
-        
-        formatted_link = ''
-        if entry.target_permalink:
-            formatted_link = f"https://www.reddit.com{entry.target_permalink}"
-        
-        # Build result with sanitization
-        result = {
-            'id': action_id,
-            'timestamp': entry.created_utc,
-            'action_type': action_type,
-            'moderator': self.sanitize_for_table(p_mod_name),
-            'target_author': self.sanitize_for_table(entry.target_author or '[deleted]'),
-            'removal_reason': self.sanitize_for_table(p_details),
-            'note': self.sanitize_for_table(parsed_mod_note),
-            'title': self.sanitize_for_table(formatted_title),
-            'url': formatted_link  # URLs don't need sanitization
-        }
-        
-        # Generate modmail URL for removals
-        if action_type in self.REMOVAL_ACTIONS:
-            result['modmail_url'] = self._generate_modmail_url(
-                self.config['target_subreddit'],
-                action_type,
-                result['title'],
-                result['url']
-            )
-        else:
-            logger.debug("Non-removal action, skipping modmail URL generation")
-            result['modmail_url'] = ''
-        
+        result = cursor.fetchone() is not None
+        conn.close()
         return result
+    except Exception as e:
+        logger.error(f"Error checking duplicate action: {e}")
+        return False
 
-    def fetch_modlog_entries(self, limit: int = 100) -> List[Dict]:
-        """Fetch and process modlog entries with rate limit handling"""
-        subreddit = self.reddit.subreddit(self.config['source_subreddit'])
-        sub_logger = self.get_subreddit_logger(self.config['source_subreddit'])
-        entries = []
+def store_processed_action(action):
+    """Store processed action to prevent duplicates"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            INSERT OR REPLACE INTO processed_actions 
+            (action_id, action_type, moderator, target_id, target_type, 
+             display_id, target_permalink, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            action.id,
+            action.action,
+            action.mod.name if action.mod else None,
+            extract_target_id(action),
+            get_target_type(action),
+            generate_display_id(action),
+            get_target_permalink(action),
+            int(action.created_utc.timestamp())
+        ))
+        
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Error storing processed action: {e}")
+        raise
 
-        sub_logger.info("Starting to fetch modlog entries, limit: %s", limit)
+def cleanup_old_entries(retention_days: int):
+    """Remove entries older than retention_days"""
+    if retention_days <= 0:
+        retention_days = CONFIG_LIMITS['retention_days']['default']
+    
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        cutoff_timestamp = int((datetime.now() - datetime.fromtimestamp(0)).total_seconds()) - (retention_days * 86400)
+        
+        cursor.execute(
+            "DELETE FROM processed_actions WHERE created_at < ?",
+            (cutoff_timestamp,)
+        )
+        
+        deleted_count = cursor.rowcount
+        conn.commit()
+        conn.close()
+        
+        if deleted_count > 0:
+            logger.info(f"Cleaned up {deleted_count} old entries")
+    except Exception as e:
+        logger.error(f"Error during cleanup: {e}")
+
+def format_content_link(action) -> str:
+    """Format content link for wiki table"""
+    if hasattr(action, 'target_title') and action.target_title:
+        title = action.target_title
+    elif hasattr(action, 'target_author') and action.target_author:
+        title = f"Content by u/{action.target_author}"
+    else:
+        title = "Unknown content"
+    
+    if hasattr(action, 'target_permalink') and action.target_permalink:
+        return f"[{title}](https://reddit.com{action.target_permalink})"
+    else:
+        return title
+
+def format_modlog_entry(action, config: Dict[str, Any]) -> Dict[str, str]:
+    """Format modlog entry with unique ID for tracking"""
+    
+    display_id = generate_display_id(action)
+    
+    return {
+        'time': action.created_utc.strftime('%H:%M:%S UTC'),
+        'action': action.action,
+        'id': display_id,
+        'moderator': action.mod.name if action.mod else 'Unknown',
+        'content': format_content_link(action),
+        'reason': action.details or 'No reason',
+        'inquire': generate_modmail_link(config['source_subreddit'], action)
+    }
+
+def generate_modmail_link(subreddit: str, action) -> str:
+    """Generate modmail link for user inquiries"""
+    subject = f"Inquiry about moderation action"
+    
+    if hasattr(action, 'target_title') and action.target_title:
+        content_desc = action.target_title[:50]
+    else:
+        content_desc = "your content"
+    
+    body = f"I would like to inquire about the {action.action} action on {content_desc}"
+    
+    from urllib.parse import quote
+    return f"https://reddit.com/message/compose?to=/r/{subreddit}&subject={quote(subject)}&message={quote(body)}"
+
+def build_wiki_content(actions: List, config: Dict[str, Any]) -> str:
+    """Build wiki page content from actions"""
+    if not actions:
+        return "No recent moderation actions found."
+    
+    # Enforce wiki entry limits
+    max_entries = config.get('max_wiki_entries_per_page', CONFIG_LIMITS['max_wiki_entries_per_page']['default'])
+    if len(actions) > max_entries:
+        logger.warning(f"Truncating wiki content to {max_entries} entries (was {len(actions)})")
+        actions = actions[:max_entries]
+    
+    # Group actions by date
+    actions_by_date = {}
+    for action in actions:
+        date_str = action.created_utc.strftime('%Y-%m-%d')
+        if date_str not in actions_by_date:
+            actions_by_date[date_str] = []
+        actions_by_date[date_str].append(action)
+    
+    # Build content
+    content_parts = []
+    for date_str in sorted(actions_by_date.keys(), reverse=True):
+        content_parts.append(f"## {date_str}")
+        content_parts.append("| Time | Action | ID | Moderator | Content | Reason | Inquire |")
+        content_parts.append("|------|--------|----|-----------|---------|--------|---------|")
+        
+        for action in sorted(actions_by_date[date_str], key=lambda x: x.created_utc, reverse=True):
+            entry = format_modlog_entry(action, config)
+            content_parts.append(f"| {entry['time']} | {entry['action']} | `{entry['id']}` | {entry['moderator']} | {entry['content']} | {entry['reason']} | {entry['inquire']} |")
+        
+        content_parts.append("")  # Empty line between dates
+    
+    return "\n".join(content_parts)
+
+def setup_reddit_client(config: Dict[str, Any]):
+    """Initialize Reddit API client"""
+    try:
+        reddit = praw.Reddit(
+            client_id=config['reddit']['client_id'],
+            client_secret=config['reddit']['client_secret'],
+            username=config['reddit']['username'],
+            password=config['reddit']['password'],
+            user_agent=f"ModlogWikiPublisher/2.0 by /u/{config['reddit']['username']}"
+        )
+        
+        # Test authentication
+        me = reddit.user.me()
+        logger.info(f"Successfully authenticated as: /u/{me.name}")
+        return reddit
+    except Exception as e:
+        logger.error(f"Failed to authenticate with Reddit: {e}")
+        raise
+
+def update_wiki_page(reddit, subreddit_name: str, wiki_page: str, content: str):
+    """Update wiki page with content"""
+    try:
+        subreddit = reddit.subreddit(subreddit_name)
+        subreddit.wiki[wiki_page].edit(
+            content=content,
+            reason="Automated modlog update"
+        )
+        logger.info(f"Updated wiki page: /r/{subreddit_name}/wiki/{wiki_page}")
+    except Exception as e:
+        logger.error(f"Failed to update wiki page: {e}")
+        raise
+
+def process_modlog_actions(reddit, config: Dict[str, Any]) -> List:
+    """Fetch and process new modlog actions"""
+    try:
+        # Validate batch size
+        batch_size = validate_config_value('batch_size', config.get('batch_size', 50), CONFIG_LIMITS)
+        if batch_size != config.get('batch_size'):
+            config['batch_size'] = batch_size
+        
+        subreddit = reddit.subreddit(config['source_subreddit'])
+        ignored_mods = set(config.get('ignored_moderators', []))
+        
+        new_actions = []
+        processed_count = 0
+        
+        logger.info(f"Fetching modlog entries from /r/{config['source_subreddit']}")
+        
+        for action in subreddit.mod.log(limit=batch_size):
+            if action.mod and action.mod.name in ignored_mods:
+                continue
+            
+            if is_duplicate_action(action.id):
+                continue
+            
+            new_actions.append(action)
+            store_processed_action(action)
+            processed_count += 1
+            
+            if processed_count >= batch_size:
+                break
+        
+        logger.info(f"Processed {processed_count} new modlog actions")
+        return new_actions
+    except Exception as e:
+        logger.error(f"Error processing modlog actions: {e}")
+        raise
+
+def load_config(config_path: str) -> Dict[str, Any]:
+    """Load and validate configuration"""
+    try:
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+        
+        # Apply defaults and validate limits
+        config = apply_config_defaults_and_limits(config)
+        
+        logger.info("Configuration loaded and validated successfully")
+        return config
+    except FileNotFoundError:
+        logger.error(f"Config file not found: {config_path}")
+        raise
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON in config file: {e}")
+        raise
+    except Exception as e:
+        logger.error(f"Error loading config: {e}")
+        logger.error("Please check your configuration file format and required fields")
+        raise
+
+def create_argument_parser():
+    """Create command line argument parser"""
+    parser = argparse.ArgumentParser(
+        description='Reddit Modlog Wiki Publisher',
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    
+    parser.add_argument(
+        '--config', default='config.json',
+        help='Path to configuration file'
+    )
+    parser.add_argument(
+        '--source-subreddit',
+        help='Source subreddit name'
+    )
+    parser.add_argument(
+        '--wiki-page', default='modlog',
+        help='Wiki page name'
+    )
+    parser.add_argument(
+        '--retention-days', type=int,
+        help='Database retention period in days'
+    )
+    parser.add_argument(
+        '--batch-size', type=int,
+        help='Number of entries to fetch per run'
+    )
+    parser.add_argument(
+        '--interval', type=int,
+        help='Update interval in seconds for continuous mode'
+    )
+    parser.add_argument(
+        '--continuous', action='store_true',
+        help='Run continuously with interval updates'
+    )
+    parser.add_argument(
+        '--test', action='store_true',
+        help='Test configuration and Reddit API access'
+    )
+    parser.add_argument(
+        '--debug', action='store_true',
+        help='Enable debug logging'
+    )
+    parser.add_argument(
+        '--show-config-limits', action='store_true',
+        help='Show configuration limits and defaults'
+    )
+    parser.add_argument(
+        '--force-migrate', action='store_true',
+        help='Force database migration (use with caution)'
+    )
+    
+    return parser
+
+def setup_logging(debug: bool = False):
+    """Setup logging configuration"""
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    
+    level = logging.DEBUG if debug else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+
+def show_config_limits():
+    """Display configuration limits and defaults"""
+    print("Configuration Limits and Defaults:")
+    print("=" * 50)
+    for key, limits in CONFIG_LIMITS.items():
+        print(f"{key}:")
+        print(f"  Default: {limits['default']}")
+        print(f"  Minimum: {limits['min']}")
+        print(f"  Maximum: {limits['max']}")
+        print()
+    
+    print("Required Configuration Fields:")
+    print("- reddit.client_id")
+    print("- reddit.client_secret")
+    print("- reddit.username")
+    print("- reddit.password")
+    print("- source_subreddit")
+
+def run_continuous_mode(reddit, config: Dict[str, Any]):
+    """Run in continuous monitoring mode"""
+    logger.info("Starting continuous mode...")
+    
+    error_count = 0
+    max_errors = config.get('max_continuous_errors', CONFIG_LIMITS['max_continuous_errors']['default'])
+    
+    while True:
         try:
-            for entry in subreddit.mod.log(limit=limit):
-                try:
-                    processed = self._process_modlog_entry(entry)
-                    if processed:
-                        processed['subreddit'] = subreddit.display_name
-                        entries.append(processed)
-                        sub_logger.debug("Processed entry: %s [%s] by %s", 
-                                       processed['id'], processed['action_type'], processed['moderator'])
-                        # Mark as processed
-                        self.db.mark_processed(
-                            processed['id'],
-                            processed['action_type'],
-                            processed['timestamp']
-                        )
-                        self.db.store_entry(processed)
-                except praw.exceptions.APIException as e:
-                    if e.error_type == "RATELIMIT":
-                        # Extract wait time from message
-                        import re
-                        match = re.search(r'(\d+) minute', str(e))
-                        wait_time = int(match.group(1)) * 60 if match else 60
-                        sub_logger.warning("Rate limited, waiting %s seconds", wait_time)
-                        time.sleep(wait_time)
-                    else:
-                        raise
+            error_count = 0  # Reset on successful run
+            actions = process_modlog_actions(reddit, config)
             
-            # Sort by timestamp (newest first)
-            entries.sort(key=lambda x: x['timestamp'], reverse=True)
-            sub_logger.info("Successfully fetched %s modlog entries", len(entries))
-
-        except Exception as e:
-            sub_logger.error("Error fetching modlog: %s", e)
-            logger.error("Error fetching modlog: %s", e)
-
-        return entries
-
-    def _format_table_row(self, entry: Dict) -> str:
-        """Format a single entry as a table row"""
-        # Format action with moderator
-        action = f"{entry['action_type']}"
-        moderator = entry['moderator']
-        
-        # Format title with URL
-        if entry['url']:
-            title = f"[{entry['title']}]({entry['url']})"
-        else:
-            title = f"{entry['title']}"
-
-        # Format removal reason
-        reason = entry['removal_reason'] or entry['note'] or '-'
-        
-        # Format inquire link
-        if entry['modmail_url']:
-            inquire = f"[Contact Mods]({entry['modmail_url']})"
-        else:
-            inquire = '-'
-
-        # Format time
-        time_str = self._format_timestamp(entry['timestamp'])
-        return f"| {time_str} | {action} | {moderator} | {title} | {reason} | {inquire} |"
-
-    def generate_wiki_content(self, entries: List[Dict]) -> str:
-        """Generate wiki page content with statistics"""
-        if not entries:
-            return "# Moderation Log\n\nNo moderation actions to display.\n\n*Last updated: {} UTC*".format(
-                datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-            )
-
-        # Calculate statistics
-        total_actions = len(entries)
-        action_counts = {}
-        for entry in entries:
-            action = entry['action_type']
-            action_counts[action] = action_counts.get(action, 0) + 1
-
-        # Group entries by date
-        grouped = {}
-        for entry in entries:
-            date = self._format_date(entry['timestamp'])
-            if date not in grouped:
-                grouped[date] = []
-            grouped[date].append(entry)
-
-        # Build content
-        lines = [
-            "# Moderation Log",
-            "",
-            f"*Last updated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC*",
-            f"*Total actions in period: {total_actions}*",
-            ""
-        ]
-
-        # Add summary if there are actions
-        if action_counts and len(action_counts) > 1:  # Only show if there's variety
-            lines.append("## Summary")
-            lines.append("")
-            # Sort by count descending, show top 5
-            for action, count in sorted(action_counts.items(), key=lambda x: x[1], reverse=True)[:5]:
-                lines.append(f"- **{action}**: {count}")
-            if len(action_counts) > 5:
-                lines.append(f"- *...and {len(action_counts) - 5} other action types*")
-            lines.append("")
-
-        # Add tables for each date
-        for date in sorted(grouped.keys(), reverse=True):
-            lines.append(f"## {date}")
-            lines.append("")
-            lines.append("| Time | Action | Moderator | Content | Reason | Inquire |")
-            lines.append("|------|--------|-----------|---------|--------|---------|")
-
-            for entry in grouped[date]:
-                row = self._format_table_row(entry)
-                lines.append(row)
-
-            lines.append("")
-
-        content = "\n".join(lines)
-
-        # Check size limit
-        if len(content) > self.wiki_char_limit:
-            logger.warning("Wiki content exceeds character limit, truncating...")
-            # Keep header and as many recent entries as possible
-            lines = lines[:4]  # Keep header
-            lines.append("\n**Note: Content truncated due to size limits**\n")
-            # Add dates/entries until we approach the limit
-            for date in sorted(grouped.keys(), reverse=True):
-                date_section = [
-                    f"## {date}",
-                    "",
-                    "| Time | Action | Moderator | Content | Reason | Inquire |",
-                    "|------|--------|-----------|---------|--------|---------|"
-                ]
-                for entry in grouped[date]:
-                    row = self._format_table_row(entry)
-                    date_section.append(row)
-                date_section.append("")
-
-                section_text = "\n".join(date_section)
-                if len("\n".join(lines)) + len(section_text) < self.wiki_char_limit - 1000:
-                    lines.extend(date_section)
-                else:
-                    break
-
-            content = "\n".join(lines)
-
-        return content
-
-    def update_wiki(self, new_entries: List[Dict]) -> bool:
-        """Merge with existing wiki content and update"""
-        target_sub = self.config['target_subreddit']
-        sub_logger = self.get_subreddit_logger(target_sub)
-        
-        try:
-            subreddit = self.reddit.subreddit(target_sub)
-            wiki_page = self.config.get('wiki_page', 'modlog')
+            if actions:
+                content = build_wiki_content(actions, config)
+                wiki_page = config.get('wiki_page', 'modlog')
+                update_wiki_page(reddit, config['source_subreddit'], wiki_page, content)
             
-            sub_logger.info("Updating wiki page: /r/%s/wiki/%s", target_sub, wiki_page)
-
-            # Get current wiki content (for logging purposes)
-            try:
-                existing_content = subreddit.wiki[wiki_page].content_md
-                sub_logger.debug("Existing wiki content size: %s characters", len(existing_content))
-            except Exception:
-                sub_logger.info("Wiki page doesn't exist yet, will create new")
-
-            # Only use DB entries; wiki parsing no longer needed
-            cutoff = time.time() - self.config.get('retention_days', 30) * 86400
-            retained = self.db.get_recent_entries(cutoff, subreddit=self.config['source_subreddit'])
+            cleanup_old_entries(config.get('retention_days', CONFIG_LIMITS['retention_days']['default']))
             
-            sub_logger.debug("Retrieved %s entries from database for retention period", len(retained))
-
-            # Sort newest first
-            retained.sort(key=lambda x: x['timestamp'], reverse=True)
-
-            # Render content
-            content = self.generate_wiki_content(retained)
-
-            # Update the wiki
-            subreddit.wiki[wiki_page].edit(
-                content=content,
-                reason="Rolling modlog update with retention"
-            )
-            sub_logger.info("Wiki page updated with %s entries, content size: %s chars", len(retained), len(content))
-            logger.info("Wiki page updated with %s entries.", len(retained))
-            return True
-
-        except praw.exceptions.APIException as e:
-            if e.error_type == "RATELIMIT":
-                sub_logger.error("Rate limited when updating wiki: %s", e)
-                logger.error("Rate limited when updating wiki: %s", e)
-                return False
-            else:
-                raise
-        except Exception as e:
-            sub_logger.error("Failed to update wiki: %s", e)
-            logger.error("Failed to update wiki: %s", e)
-            return False
-
-    def run_once(self):
-        """Run a single update cycle"""
-        source_sub = self.config['source_subreddit']
-        sub_logger = self.get_subreddit_logger(source_sub)
-        
-        logger.info("Starting modlog update cycle...")
-        sub_logger.info("=== Starting update cycle for /r/%s ===", source_sub)
-
-        # Cleanup old database entries
-        self.db.cleanup_old_entries()
-
-        # Fetch recent modlog entries
-        entries = self.fetch_modlog_entries(limit=self.batch_size)
-
-        if entries:
-            logger.info("Processing %s new modlog entries", len(entries))
-            sub_logger.info("Processing %s new modlog entries", len(entries))
-            # Update wiki with current database content
-            self.update_wiki(entries)
-        else:
-            logger.info("No new modlog entries to process")
-            sub_logger.info("No new modlog entries to process")
-            
-        sub_logger.info("=== Completed update cycle for /r/%s ===", source_sub)
-
-    def run_continuous(self):
-        """Run continuously with interval"""
-        interval = self.config.get('update_interval', 300)
-        logger.info("Starting continuous mode, updating every %s seconds", interval)
-
-        while True:
-            try:
-                self.run_once()
-            except Exception as e:
-                logger.error("Error in update cycle: %s", e)
-
-            logger.info("Sleeping for %s seconds...", interval)
+            interval = validate_config_value('update_interval', 
+                                           config.get('update_interval', CONFIG_LIMITS['update_interval']['default']), 
+                                           CONFIG_LIMITS)
+            logger.info(f"Waiting {interval} seconds until next update...")
             time.sleep(interval)
-
-    def cleanup(self):
-        """Cleanup resources"""
-        self.db.close()
-        
-        # Close all subreddit loggers
-        for subreddit, sub_logger in self.subreddit_loggers.items():
-            for handler in sub_logger.handlers[:]:
-                handler.close()
-                sub_logger.removeHandler(handler)
-            logger.debug("Closed logging for subreddit: %s", subreddit)
-
+            
+        except KeyboardInterrupt:
+            logger.info("Received interrupt signal, shutting down...")
+            break
+        except Exception as e:
+            error_count += 1
+            logger.error(f"Error in continuous mode (attempt {error_count}/{max_errors}): {e}")
+            
+            if error_count >= max_errors:
+                logger.error(f"Maximum error count ({max_errors}) reached, shutting down")
+                break
+            
+            # Exponential backoff for errors
+            wait_time = min(60 * (2 ** (error_count - 1)), 300)  # Max 5 minutes
+            logger.info(f"Waiting {wait_time} seconds before retry...")
+            time.sleep(wait_time)
 
 def main():
-    """Main entry point"""
-    parser = argparse.ArgumentParser(description='Reddit Modlog Wiki Publisher')
-    parser.add_argument('--config', default='config.json', help='Path to configuration file')
-    parser.add_argument('--source-subreddit', help='Source subreddit (modlog source)')
-    parser.add_argument('--wiki-page', help='Wiki page name (default: modlog)')
-    parser.add_argument('--retention-days', type=int, help='Retention window in days')
-    parser.add_argument('--batch-size', type=int, help='Batch size to fetch per run')
-    parser.add_argument('--interval', type=int, help='Interval (seconds) for continuous mode')
-    parser.add_argument('--debug', action='store_true', help='Enable debug logging')
-    parser.add_argument('--continuous', action='store_true', help='Run continuously')
-    parser.add_argument('--test', action='store_true', help='Test configuration and exit')
+    parser = create_argument_parser()
     args = parser.parse_args()
-
-    if args.debug:
-        logging.getLogger().setLevel(logging.DEBUG)
-
+    
+    setup_logging(args.debug)
+    
     try:
-        # Create and run publisher
-        publisher = ModlogWikiPublisher(args.config, args)
-
+        # Show configuration limits if requested
+        if args.show_config_limits:
+            show_config_limits()
+            return
+        
+        # Force migration if requested
+        if args.force_migrate:
+            logger.info("Forcing database migration...")
+            migrate_database()
+            logger.info("Database migration completed")
+            return
+        
+        setup_database()
+        
+        config = load_config(args.config)
+        
+        # Override config with CLI args
+        if args.source_subreddit:
+            config['source_subreddit'] = args.source_subreddit
+        if args.wiki_page:
+            config['wiki_page'] = args.wiki_page
+        if args.retention_days is not None:
+            config['retention_days'] = args.retention_days
+        if args.batch_size is not None:
+            config['batch_size'] = args.batch_size
+        if args.interval is not None:
+            config['update_interval'] = args.interval
+        
+        reddit = setup_reddit_client(config)
+        
         if args.test:
-            # Test mode - just validate connection
-            success = publisher.test_connection()
-            sys.exit(0 if success else 1)
-        elif args.continuous:
-            # Continuous mode
-            publisher.run_continuous()
+            logger.info("Running connection test...")
+            # Basic test - try to fetch one modlog entry
+            subreddit = reddit.subreddit(config['source_subreddit'])
+            test_entry = next(subreddit.mod.log(limit=1), None)
+            if test_entry:
+                logger.info("✓ Successfully connected and can read modlog")
+            else:
+                logger.warning("⚠ Connected but no modlog entries found")
+            return
+        
+        # Process modlog actions
+        actions = process_modlog_actions(reddit, config)
+        
+        if actions:
+            logger.info(f"Found {len(actions)} new actions to process")
+            content = build_wiki_content(actions, config)
+            wiki_page = config.get('wiki_page', 'modlog')
+            update_wiki_page(reddit, config['source_subreddit'], wiki_page, content)
+        
+        cleanup_old_entries(config.get('retention_days', CONFIG_LIMITS['retention_days']['default']))
+        
+        if args.continuous:
+            run_continuous_mode(reddit, config)
         else:
-            # Default: run once
-            publisher.run_once()
+            logger.info("Single run completed")
+    
     except KeyboardInterrupt:
         logger.info("Received interrupt signal, shutting down...")
-    except ValueError as e:
-        logger.error("Configuration error: %s", e)
-        sys.exit(1)
+        sys.exit(0)
     except Exception as e:
-        logger.error("Unexpected error: %s", e)
+        logger.error(f"Fatal error: {e}")
         sys.exit(1)
-    finally:
-        if 'publisher' in locals():
-            publisher.cleanup()
-
 
 if __name__ == "__main__":
     main()

@@ -6,10 +6,18 @@
     "password": "YOUR_BOT_PASSWORD"
   },
   "source_subreddit": "YourSubreddit",
-  "target_subreddit": "YourSubreddit",
   "wiki_page": "modlog",
-  "ignored_moderators": ["AutoModerator", "BotDefense"],
-  "update_interval": 300,
-  "batch_size": 100,
-  "retention_days": 30
+  "retention_days": 90,
+  "batch_size": 50,
+  "update_interval": 600,
+  "max_wiki_entries_per_page": 1000,
+  "max_continuous_errors": 5,
+  "rate_limit_buffer": 60,
+  "max_batch_retries": 3,
+  "archive_threshold_days": 7,
+  "ignored_moderators": ["AutoModerator"],
+  "display_format": {
+    "show_full_ids": false,
+    "id_format": "prefixed"
+  }
 }
