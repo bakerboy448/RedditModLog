@@ -467,11 +467,14 @@ def store_processed_action(action, subreddit_name=None):
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
-        # Process removal reason properly - ALWAYS prefer mod_note over numeric details
+        # Process removal reason properly - ALWAYS prefer actual text over numeric details
         removal_reason = None
         
+        # For addremovalreason actions, use description field (contains actual text)
+        if action.action == 'addremovalreason' and hasattr(action, 'description') and action.description:
+            removal_reason = censor_email_addresses(str(action.description).strip())
         # First priority: mod_note (actual removal reason text)
-        if hasattr(action, 'mod_note') and action.mod_note:
+        elif hasattr(action, 'mod_note') and action.mod_note:
             removal_reason = censor_email_addresses(str(action.mod_note).strip())
         # Second priority: details (accept ALL details text, including numbers)
         elif hasattr(action, 'details') and action.details:
