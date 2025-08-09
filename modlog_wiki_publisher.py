@@ -779,7 +779,7 @@ def format_modlog_entry(action, config: Dict[str, Any]) -> Dict[str, str]:
     }
 
 def generate_modmail_link(subreddit: str, action) -> str:
-    """Generate modmail link for user inquiries - matches main branch format"""
+    """Generate modmail link for user inquiries with content ID for tracking"""
     from urllib.parse import quote
     
     # Determine removal type like main branch
@@ -793,6 +793,13 @@ def generate_modmail_link(subreddit: str, action) -> str:
         'addremovalreason': 'Removal Reason',
     }
     removal_type = type_map.get(action.action, 'Content')
+    
+    # Get content ID for tracking
+    content_id = "-"
+    if hasattr(action, 'target_permalink') and action.target_permalink:
+        extracted_id = extract_content_id_from_permalink(action.target_permalink)
+        if extracted_id:
+            content_id = extracted_id.replace('t3_', '').replace('t1_', '')[:8]
     
     # Get title and truncate if needed
     if hasattr(action, 'target_title') and action.target_title:
@@ -812,13 +819,14 @@ def generate_modmail_link(subreddit: str, action) -> str:
     elif hasattr(action, 'target_permalink') and action.target_permalink:
         url = f"https://www.reddit.com{action.target_permalink}" if not action.target_permalink.startswith('http') else action.target_permalink
     
-    # Create subject line like main branch
-    subject = f"{removal_type} Removal Inquiry - {title}"
+    # Create subject line with content ID for tracking
+    subject = f"{removal_type} Removal Inquiry - {title} [ID: {content_id}]"
     
-    # Create body like main branch
+    # Create body with content ID for easier modmail tracking
     body = (
         f"Hello Moderators of /r/{subreddit},\n\n"
         f"I would like to inquire about the recent removal of the following {removal_type.lower()}:\n\n"
+        f"**Content ID:** {content_id}\n\n"
         f"**Title:** {title}\n\n"
         f"**Action Type:** {action.action}\n\n"
         f"**Link:** {url}\n\n"
