@@ -631,7 +631,7 @@ def get_recent_actions_from_db(config: Dict[str, Any], force_all_actions: bool =
         action_count = cursor.fetchone()[0]
         
         # If no actions exist for this subreddit, return empty list
-        if not force and action_count == 0:
+        if action_count == 0:
             logger.info(f"No actions found for subreddit '{subreddit_name}' in the specified time range")
             conn.close()
             return []
@@ -1252,11 +1252,11 @@ def main():
         if args.force_modlog:
             logger.info("Force modlog requested - fetching ALL modlog actions from Reddit and rebuilding wiki...")
             # First, fetch all recent modlog actions to populate database
-            logger.info("Step 1: Fetching all modlog actions from Reddit...")
+            logger.info("Fetching all modlog actions from Reddit...")
             process_modlog_actions(reddit, config)
             
             # Then rebuild wiki from database (showing only removal actions)
-            logger.info("Step 2: Rebuilding wiki from database...")
+            logger.info("Rebuilding wiki from database...")
             actions = get_recent_actions_from_db(config, force_all_actions=False,show_only_removals=True)
             if actions:
                 logger.info(f"Found {len(actions)} removal actions in database for wiki")
