@@ -784,7 +784,7 @@ def format_modlog_entry(action, config: Dict[str, Any]) -> Dict[str, str]:
         'id': content_id,
         'moderator': get_moderator_name(action, config.get('anonymize_moderators', True)) or 'Unknown',
         'content': format_content_link(action),
-        'reason': reason_text.replace("|"," "),
+        'reason': str(reason_text).replace("|"," "),
         'inquire': generate_modmail_link(config['source_subreddit'], action)
     }
 
