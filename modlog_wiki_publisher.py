@@ -11,6 +11,7 @@ import time
 import argparse
 import logging
 import re
+import hashlib
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 
@@ -33,7 +34,7 @@ CONFIG_LIMITS = {
 }
 
 # Database schema version
-CURRENT_DB_VERSION = 3
+CURRENT_DB_VERSION = 4
 
 def get_db_version():
     """Get current database schema version"""
@@ -208,6 +209,25 @@ def migrate_database():
             
             set_db_version(3)
         
+        # Migration from version 3 to 4: Add wiki hash caching table
+        if current_version < 4:
+            logger.info("Applying migration: Add wiki hash caching table (v3 -> v4)")
+            
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS wiki_hash_cache (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    subreddit TEXT NOT NULL,
+                    wiki_page TEXT NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    last_updated INTEGER DEFAULT (strftime('%s', 'now')),
+                    UNIQUE(subreddit, wiki_page)
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_subreddit_page ON wiki_hash_cache(subreddit, wiki_page)")
+            logger.info("Created wiki_hash_cache table")
+            
+            set_db_version(4)
+        
         conn.commit()
         conn.close()
         logger.info(f"Database migration completed successfully to version {target_version}")
@@ -224,6 +244,41 @@ def setup_database():
     except Exception as e:
         logger.error(f"Database setup failed: {e}")
         raise
+
+def get_content_hash(content: str) -> str:
+    """Calculate SHA-256 hash of content"""
+    return hashlib.sha256(content.encode('utf-8')).hexdigest()
+
+def get_cached_wiki_hash(subreddit: str, wiki_page: str) -> Optional[str]:
+    """Get cached wiki content hash for subreddit/page"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT content_hash FROM wiki_hash_cache WHERE subreddit = ? AND wiki_page = ?",
+            (subreddit, wiki_page)
+        )
+        result = cursor.fetchone()
+        conn.close()
+        return result[0] if result else None
+    except Exception as e:
+        logger.warning(f"Failed to get cached wiki hash: {e}")
+        return None
+
+def update_cached_wiki_hash(subreddit: str, wiki_page: str, content_hash: str):
+    """Update cached wiki content hash for subreddit/page"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT OR REPLACE INTO wiki_hash_cache (subreddit, wiki_page, content_hash, last_updated)
+            VALUES (?, ?, ?, strftime('%s', 'now'))
+        """, (subreddit, wiki_page, content_hash))
+        conn.commit()
+        conn.close()
+        logger.debug(f"Updated cached hash for /r/{subreddit}/wiki/{wiki_page}")
+    except Exception as e:
+        logger.warning(f"Failed to update cached wiki hash: {e}")
 
 def get_action_datetime(action):
     """Convert action.created_utc to datetime object regardless of input type"""
@@ -584,15 +639,33 @@ def setup_reddit_client(config: Dict[str, Any]):
         logger.error(f"Failed to authenticate with Reddit: {e}")
         raise
 
-def update_wiki_page(reddit, subreddit_name: str, wiki_page: str, content: str):
-    """Update wiki page with content"""
+def update_wiki_page(reddit, subreddit_name: str, wiki_page: str, content: str, force: bool = False):
+    """Update wiki page with content, using hash caching to avoid unnecessary updates"""
     try:
+        # Calculate content hash
+        content_hash = get_content_hash(content)
+        
+        # Check if content has changed (unless forced)
+        if not force:
+            cached_hash = get_cached_wiki_hash(subreddit_name, wiki_page)
+            if cached_hash == content_hash:
+                logger.info(f"Wiki content unchanged for /r/{subreddit_name}/wiki/{wiki_page}, skipping update")
+                return False
+        
+        # Update the wiki page
         subreddit = reddit.subreddit(subreddit_name)
         subreddit.wiki[wiki_page].edit(
             content=content,
             reason="Automated modlog update"
         )
-        logger.info(f"Updated wiki page: /r/{subreddit_name}/wiki/{wiki_page}")
+        
+        # Update the cached hash
+        update_cached_wiki_hash(subreddit_name, wiki_page, content_hash)
+        
+        action_type = "force updated" if force else "updated"
+        logger.info(f"Successfully {action_type} wiki page: /r/{subreddit_name}/wiki/{wiki_page}")
+        return True
+        
     except Exception as e:
         logger.error(f"Failed to update wiki page: {e}")
         raise
@@ -759,6 +832,10 @@ def create_argument_parser():
         '--force-refresh', action='store_true',
         help='Force refresh wiki page with all recent actions from database'
     )
+    parser.add_argument(
+        '--force', action='store_true',
+        help='Force update wiki page even if content hash matches (note: use --force if same content needs to be pushed)'
+    )
     
     return parser
 
@@ -790,7 +867,7 @@ def show_config_limits():
     print("- reddit.password")
     print("- source_subreddit")
 
-def run_continuous_mode(reddit, config: Dict[str, Any]):
+def run_continuous_mode(reddit, config: Dict[str, Any], force: bool = False):
     """Run in continuous monitoring mode"""
     logger.info("Starting continuous mode...")
     
@@ -805,7 +882,7 @@ def run_continuous_mode(reddit, config: Dict[str, Any]):
             if actions:
                 content = build_wiki_content(actions, config)
                 wiki_page = config.get('wiki_page', 'modlog')
-                update_wiki_page(reddit, config['source_subreddit'], wiki_page, content)
+                update_wiki_page(reddit, config['source_subreddit'], wiki_page, content, force=force)
             
             cleanup_old_entries(config.get('retention_days', CONFIG_LIMITS['retention_days']['default']))
             
@@ -886,7 +963,7 @@ def main():
                 logger.info(f"Found {len(actions)} actions in database for wiki refresh")
                 content = build_wiki_content(actions, config)
                 wiki_page = config.get('wiki_page', 'modlog')
-                update_wiki_page(reddit, config['source_subreddit'], wiki_page, content)
+                update_wiki_page(reddit, config['source_subreddit'], wiki_page, content, force=True)
                 logger.info("Wiki page force refresh completed")
             else:
                 logger.warning("No actions found in database for wiki refresh")
@@ -899,12 +976,12 @@ def main():
             logger.info(f"Found {len(actions)} new actions to process")
             content = build_wiki_content(actions, config)
             wiki_page = config.get('wiki_page', 'modlog')
-            update_wiki_page(reddit, config['source_subreddit'], wiki_page, content)
+            update_wiki_page(reddit, config['source_subreddit'], wiki_page, content, force=args.force)
         
         cleanup_old_entries(config.get('retention_days', CONFIG_LIMITS['retention_days']['default']))
         
         if args.continuous:
-            run_continuous_mode(reddit, config)
+            run_continuous_mode(reddit, config, force=args.force)
         else:
             logger.info("Single run completed")
     
