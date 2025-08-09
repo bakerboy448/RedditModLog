@@ -473,14 +473,14 @@ def store_processed_action(action, subreddit_name=None):
         # First priority: mod_note (actual removal reason text)
         if hasattr(action, 'mod_note') and action.mod_note:
             removal_reason = censor_email_addresses(str(action.mod_note).strip())
-        # Second priority: details (but only if it's not just a number)
+        # Second priority: details (accept all non-empty details text)
         elif hasattr(action, 'details') and action.details:
             details_str = str(action.details).strip()
-            if not details_str.isdigit():
-                removal_reason = censor_email_addresses(details_str)
-            # If it's just a number and we don't have mod_note, show generic message
-            else:
+            # Only show generic message for purely numeric details that are likely IDs
+            if details_str.isdigit() and len(details_str) > 6:
                 removal_reason = "Removal reason applied"
+            else:
+                removal_reason = censor_email_addresses(details_str)
         
         # Extract subreddit from URL if not provided
         target_permalink = get_target_permalink(action)
