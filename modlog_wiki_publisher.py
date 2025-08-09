@@ -517,7 +517,7 @@ def store_processed_action(action, subreddit_name=None):
             get_target_type(action),
             generate_display_id(action),
             target_permalink,
-            removal_reason.replace("|"," "),  # Store properly processed removal reason
+            removal_reason.replace("|"," ") if removal_reason is not None else None,  # Store properly processed removal reason
             target_author,
             int(action.created_utc) if isinstance(action.created_utc, (int, float)) else int(action.created_utc.timestamp()),
             subreddit_name or 'unknown'
