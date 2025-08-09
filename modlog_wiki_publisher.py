@@ -474,11 +474,11 @@ def store_processed_action(action, subreddit_name=None):
         if hasattr(action, 'mod_note') and action.mod_note:
             removal_reason = censor_email_addresses(str(action.mod_note).strip())
         # Second priority: details (accept all non-empty details text)
-        elif hasattr(action, 'description') and action.description:
-            details_str = str(action.description).strip()
-            # Only show generic message for purely numeric details that are likely IDs
-            if details_str.isdigit() and len(details_str) > 6:
-                removal_reason = f"ModLog description appears as a numeric id? [{details_str}]. A Removal reason was applied"
+        elif hasattr(action, 'details') and action.details:
+            details_str = str(action.details).strip()
+            # Only show generic message for removal reason template numbers (1-15)
+            if details_str.isdigit() and 1 <= int(details_str) <= 15:
+                removal_reason = "Removal reason applied"
             else:
                 removal_reason = censor_email_addresses(details_str)
         
