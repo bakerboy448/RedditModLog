@@ -675,7 +675,7 @@ def get_recent_actions_from_db(config: Dict[str, Any], force_all_actions: bool =
                     self.mod = moderator
                     # Use the timestamp directly
                     self.created_utc = timestamp
-                    self.details = removal_reason or "No removal reason found."
+                    self.details = removal_reason
                     self.display_id = display_id
                     self.target_permalink = target_permalink.replace('https://reddit.com', '') if target_permalink and target_permalink.startswith('https://reddit.com') else target_permalink
                     self.target_permalink_cached = target_permalink
