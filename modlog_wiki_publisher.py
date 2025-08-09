@@ -586,7 +586,7 @@ def cleanup_old_entries(retention_days: int):
     except Exception as e:
         logger.error(f"Error during cleanup: {e}")
 
-def get_recent_actions_from_db(config: Dict[str, Any], force_all_actions: bool = False) -> List:
+def get_recent_actions_from_db(config: Dict[str, Any], force_all_actions: bool = False, force_removal_only: bool = False) -> List:
     """Fetch recent actions from database for force refresh"""
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -598,6 +598,10 @@ def get_recent_actions_from_db(config: Dict[str, Any], force_all_actions: bool =
             cursor.execute("SELECT DISTINCT action_type FROM processed_actions WHERE action_type IS NOT NULL")
             wiki_actions = set(row[0] for row in cursor.fetchall())
             logger.info(f"Force refresh: including all action types: {wiki_actions}")
+        elif force_removal_only:
+            wiki_actions = set([
+                'removelink', 'removecomment', 'addremovalreason', 'spamlink', 'spamcomment'
+            ])
         else:
             # Get configurable list of actions to show in wiki
             wiki_actions = set(config.get('wiki_actions', [
@@ -923,9 +927,11 @@ def update_wiki_page(reddit, subreddit_name: str, wiki_page: str, content: str, 
         content_hash = get_content_hash(content)
         
         # Check if content has changed (unless forced)
-        if not force:
-            cached_hash = get_cached_wiki_hash(subreddit_name, wiki_page)
-            if cached_hash == content_hash:
+        cached_hash = get_cached_wiki_hash(subreddit_name, wiki_page)
+        if cached_hash == content_hash:
+            if force:
+                logger.info(f"Wiki content unchanged, but you selected force for /r/{subreddit_name}/wiki/{wiki_page}, forcing update")
+            else:
                 logger.info(f"Wiki content unchanged for /r/{subreddit_name}/wiki/{wiki_page}, skipping update")
                 return False
         
@@ -1252,13 +1258,12 @@ def main():
             
             # Then rebuild wiki from database (showing only removal actions)
             logger.info("Step 2: Rebuilding wiki from database...")
-            actions = get_recent_actions_from_db(config, force_all_actions=False)
+            actions = get_recent_actions_from_db(config, force_all_actions=False,show_only_removals=True)
             if actions:
                 logger.info(f"Found {len(actions)} removal actions in database for wiki")
                 content = build_wiki_content(actions, config)
                 wiki_page = config.get('wiki_page', 'modlog')
                 update_wiki_page(reddit, config['source_subreddit'], wiki_page, content, force=args.force_wiki)
-                logger.info("Wiki page completely rebuilt from database")
             else:
                 logger.warning("No removal actions found in database for wiki refresh")
             return
@@ -1266,8 +1271,10 @@ def main():
         # Process modlog actions
         actions = process_modlog_actions(reddit, config)
         
-        if actions:
+        if actions or args.force_wiki:
             logger.info(f"Found {len(actions)} new actions to process")
+            if args.force_wiki:
+                logger.info("Force Wiki Selected")
             content = build_wiki_content(actions, config)
             wiki_page = config.get('wiki_page', 'modlog')
             update_wiki_page(reddit, config['source_subreddit'], wiki_page, content, force=args.force_wiki)
