@@ -289,6 +289,10 @@ def generate_display_id(action):
 
 def get_target_permalink(action):
     """Get permalink for the target content"""
+    # Check if we have a cached permalink from database
+    if hasattr(action, 'target_permalink_cached') and action.target_permalink_cached:
+        return action.target_permalink_cached
+    
     try:
         if hasattr(action, 'target_submission') and action.target_submission:
             if hasattr(action.target_submission, 'permalink'):
@@ -375,6 +379,77 @@ def cleanup_old_entries(retention_days: int):
     except Exception as e:
         logger.error(f"Error during cleanup: {e}")
 
+def get_recent_actions_from_db(config: Dict[str, Any]) -> List:
+    """Fetch recent actions from database for force refresh"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Get configurable list of actions to show in wiki
+        wiki_actions = set(config.get('wiki_actions', [
+            'removelink', 'removecomment', 'addremovalreason', 'spamlink', 'spamcomment'
+        ]))
+        
+        # Get recent actions within retention period
+        retention_days = config.get('retention_days', CONFIG_LIMITS['retention_days']['default'])
+        cutoff_timestamp = int((datetime.now() - datetime.fromtimestamp(0)).total_seconds()) - (retention_days * 86400)
+        
+        # Limit to max wiki entries
+        max_entries = config.get('max_wiki_entries_per_page', CONFIG_LIMITS['max_wiki_entries_per_page']['default'])
+        
+        placeholders = ','.join(['?'] * len(wiki_actions))
+        query = f"""
+            SELECT action_id, action_type, moderator, target_id, target_type, 
+                   display_id, target_permalink, timestamp 
+            FROM processed_actions 
+            WHERE timestamp >= ? AND action_type IN ({placeholders})
+            ORDER BY timestamp DESC 
+            LIMIT ?
+        """
+        
+        cursor.execute(query, [cutoff_timestamp] + list(wiki_actions) + [max_entries])
+        rows = cursor.fetchall()
+        conn.close()
+        
+        logger.debug(f"Database query returned {len(rows)} rows")
+        
+        # Convert database rows to mock action objects for compatibility with existing functions
+        mock_actions = []
+        for row in rows:
+            action_id, action_type, moderator, target_id, target_type, display_id, target_permalink, timestamp = row
+            logger.debug(f"Processing cached action: {action_type} by {moderator} at {timestamp}")
+            
+            # Create a mock action object with the data we have
+            class MockAction:
+                def __init__(self, action_id, action_type, moderator, target_id, target_type, display_id, target_permalink, timestamp):
+                    self.id = action_id
+                    self.action = action_type
+                    self.mod = moderator
+                    # Use the timestamp directly
+                    self.created_utc = timestamp
+                    self.details = "Cached action from database"
+                    self.display_id = display_id
+                    self.target_permalink_cached = target_permalink
+                    
+                    # Set target attributes based on type
+                    if target_type == 'post':
+                        self.target_submission = target_id
+                        self.target_title = f"Post {target_id}"
+                    elif target_type == 'comment':
+                        self.target_comment = target_id
+                        self.target_title = f"Comment {target_id}"
+                    elif target_type == 'user':
+                        self.target_author = target_id
+                    
+            mock_actions.append(MockAction(action_id, action_type, moderator, target_id, target_type, display_id, target_permalink, timestamp))
+        
+        logger.info(f"Retrieved {len(mock_actions)} actions from database for force refresh")
+        return mock_actions
+        
+    except Exception as e:
+        logger.error(f"Error fetching actions from database: {e}")
+        return []
+
 def format_content_link(action) -> str:
     """Format content link for wiki table"""
     if hasattr(action, 'target_title') and action.target_title:
@@ -388,8 +463,14 @@ def format_content_link(action) -> str:
     else:
         title = "Unknown content"
     
-    if hasattr(action, 'target_permalink') and action.target_permalink:
-        return f"[{title}](https://reddit.com{action.target_permalink})"
+    # Get permalink using the updated function that handles cached permalinks
+    permalink = get_target_permalink(action)
+    if permalink:
+        # Handle both full URLs and relative permalinks
+        if permalink.startswith('http'):
+            return f"[{title}]({permalink})"
+        else:
+            return f"[{title}](https://reddit.com{permalink})"
     else:
         return title
 
@@ -646,6 +727,10 @@ def create_argument_parser():
         '--no-auto-update-config', action='store_true',
         help='Disable automatic config file updates'
     )
+    parser.add_argument(
+        '--force-refresh', action='store_true',
+        help='Force refresh wiki page with all recent actions from database'
+    )
     
     return parser
 
@@ -764,6 +849,19 @@ def main():
                 logger.info("✓ Successfully connected and can read modlog")
             else:
                 logger.warning("⚠ Connected but no modlog entries found")
+            return
+        
+        if args.force_refresh:
+            logger.info("Force refresh requested - rebuilding wiki from database...")
+            actions = get_recent_actions_from_db(config)
+            if actions:
+                logger.info(f"Found {len(actions)} actions in database for wiki refresh")
+                content = build_wiki_content(actions, config)
+                wiki_page = config.get('wiki_page', 'modlog')
+                update_wiki_page(reddit, config['source_subreddit'], wiki_page, content)
+                logger.info("Wiki page force refresh completed")
+            else:
+                logger.warning("No actions found in database for wiki refresh")
             return
         
         # Process modlog actions
