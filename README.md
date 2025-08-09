@@ -13,7 +13,7 @@ Automatically publishes Reddit moderation logs to a subreddit wiki page with mod
 * 🧩 Fully CLI-configurable (no need to edit `config.json`)
 * 📁 Per-subreddit log files for debugging and monitoring
 * 🔒 Configurable moderator anonymization (AutoModerator/HumanModerator)
-* 📝 **Full removal reason transparency** - shows actual text, template numbers, all available data
+* 📝 **Complete removal reason transparency** - AutoModerator rule text, addremovalreason descriptions, all actual removal text (never generic messages or template numbers)
 * 🔗 Links directly to actual content (posts/comments), never user profiles for privacy
 * 🆔 **Unique content IDs** - comments show comment IDs, posts show post IDs for precise tracking
 * ✅ **Multi-subreddit database support** - single database handles multiple subreddits safely
@@ -111,12 +111,13 @@ The database will automatically migrate to the latest schema version on startup.
 Sample wiki table output:
 
 ```markdown
-## 2025-08-08
+## 2025-08-09
 
 | Time | Action | ID | Moderator | Content | Reason | Inquire |
 |------|--------|----|-----------|---------|--------|---------|
-| 23:19:35 UTC | removecomment | 1mkz4jm | AutoModerator | [Comment by u/potherb85](https://www.reddit.com/r/usenet/comments/1mkz4jm/usenet_in_china/n7otf1f/) | Filter - Possible Non Usenet related [proxy], review/approve manually | [Contact Mods](https://www.reddit.com/message/compose?to=/r/usenet&subject=Comment%20Removal%20Inquiry%20-%20Content%20by%20u/potherb85...) |
-| 22:33:36 UTC | addremovalreason | 1mkyw13 | HumanModerator | [How can I verify if NewsLazer is actually using SSL?](https://www.reddit.com/r/usenet/comments/1mkyw13/how_can_i_verify_if_newslazer_is_actually_using/) | No Discussions About Usenet Automation Software | [Contact Mods](https://www.reddit.com/message/compose?to=/r/usenet&subject=Removal%20Reason...) |
+| 08:15:42 UTC | removecomment | n7ravg2 | AutoModerator | [Comment by u/user123](https://www.reddit.com/r/opensignups/comments/1ab2cd3/title/n7ravg2/) | Possibly requesting an invite - [invited] Offers must be [O] 3x Invites to MyAwesomeTracker | [Contact Mods](https://www.reddit.com/message/compose?to=/r/opensignups&subject=Comment%20Removal%20Inquiry...) |
+| 07:45:18 UTC | addremovalreason | 1ab2cd3 | Bakerboy448 | [Post title here](https://www.reddit.com/r/opensignups/comments/1ab2cd3/title/) | Invites - No asking | [Contact Mods](https://www.reddit.com/message/compose?to=/r/opensignups&subject=Removal%20Reason%20Inquiry...) |
+| 06:32:15 UTC | removelink | 1xy9def | AutoModerator | [Another post](https://www.reddit.com/r/opensignups/comments/1xy9def/another/) | No standalone URL in post body | [Contact Mods](https://www.reddit.com/message/compose?to=/r/opensignups&subject=Post%20Removal%20Inquiry...) |
 ```
 
 ## Logging
@@ -205,7 +206,15 @@ sqlite3 modlog.db "DELETE FROM processed_actions WHERE created_at < date('now', 
 
 ### Database Schema
 
-The database now includes a `removal_reason` column that stores the reason/details from Reddit's API for each moderation action.
+The database includes comprehensive moderation data with full transparency:
+
+- **`removal_reason` column**: Stores actual removal reason text from Reddit's API
+  - AutoModerator actions: Full rule text (e.g., "Possibly requesting an invite - [invited] Offers must be [O]")
+  - addremovalreason actions: Readable removal reason (e.g., "Invites - No asking") instead of template numbers
+  - Manual removals: Moderator-provided text or rule details
+- **`target_author` column**: Actual usernames of content authors (never shows [deleted])
+- **`subreddit` column**: Multi-subreddit support with proper data separation
+- **Unique content IDs**: Comments show comment IDs (e.g., n7ravg2), posts show post IDs
 
 ## Systemd Service (Optional)
 
