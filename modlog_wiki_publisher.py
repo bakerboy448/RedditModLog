@@ -106,6 +106,11 @@ def apply_config_defaults_and_limits(config):
         else:
             config[key] = validate_config_value(key, config[key], CONFIG_LIMITS)
     
+    # Set default wiki actions if not specified
+    if 'wiki_actions' not in config:
+        config['wiki_actions'] = ['removelink', 'removecomment', 'addremovalreason', 'spamlink', 'spamcomment']
+        logger.info("Using default wiki_actions: removals and removal reasons only")
+    
     # Validate required fields
     required_fields = ['reddit', 'source_subreddit']
     for field in required_fields:
@@ -202,14 +207,51 @@ def setup_database():
         logger.error(f"Database setup failed: {e}")
         raise
 
+def get_action_datetime(action):
+    """Convert action.created_utc to datetime object regardless of input type"""
+    if isinstance(action.created_utc, (int, float)):
+        return datetime.fromtimestamp(action.created_utc, tz=timezone.utc)
+    else:
+        return action.created_utc
+
+def get_moderator_name(action):
+    """Get moderator name with censoring for human moderators"""
+    if not action.mod:
+        return None
+    
+    # Extract the actual moderator name
+    if isinstance(action.mod, str):
+        mod_name = action.mod
+    else:
+        mod_name = action.mod.name
+    
+    # Handle special cases - don't censor these
+    if mod_name.lower() in ['automoderator', 'reddit']:
+        if mod_name.lower() == 'automoderator':
+            return 'AutoMod'
+        else:
+            return 'Reddit'
+    
+    # For human moderators, show generic label
+    return 'HumanModerator'
+
 def extract_target_id(action):
     """Extract Reddit ID from action target"""
     if hasattr(action, 'target_submission') and action.target_submission:
-        return action.target_submission.id
+        if hasattr(action.target_submission, 'id'):
+            return action.target_submission.id
+        else:
+            return str(action.target_submission)
     elif hasattr(action, 'target_comment') and action.target_comment:
-        return action.target_comment.id
+        if hasattr(action.target_comment, 'id'):
+            return action.target_comment.id
+        else:
+            return str(action.target_comment)
     elif hasattr(action, 'target_author') and action.target_author:
-        return action.target_author.name
+        if hasattr(action.target_author, 'name'):
+            return action.target_author.name
+        else:
+            return str(action.target_author)
     else:
         return action.id  # Fallback to action ID
 
@@ -249,11 +291,16 @@ def get_target_permalink(action):
     """Get permalink for the target content"""
     try:
         if hasattr(action, 'target_submission') and action.target_submission:
-            return f"https://reddit.com{action.target_submission.permalink}"
+            if hasattr(action.target_submission, 'permalink'):
+                return f"https://reddit.com{action.target_submission.permalink}"
         elif hasattr(action, 'target_comment') and action.target_comment:
-            return f"https://reddit.com{action.target_comment.permalink}"
+            if hasattr(action.target_comment, 'permalink'):
+                return f"https://reddit.com{action.target_comment.permalink}"
         elif hasattr(action, 'target_author') and action.target_author:
-            return f"https://reddit.com/u/{action.target_author.name}"
+            if hasattr(action.target_author, 'name'):
+                return f"https://reddit.com/u/{action.target_author.name}"
+            else:
+                return f"https://reddit.com/u/{action.target_author}"
     except:
         pass
     return None
@@ -289,12 +336,12 @@ def store_processed_action(action):
         """, (
             action.id,
             action.action,
-            action.mod.name if action.mod else None,
+            get_moderator_name(action),
             extract_target_id(action),
             get_target_type(action),
             generate_display_id(action),
             get_target_permalink(action),
-            int(action.created_utc.timestamp())
+            int(action.created_utc) if isinstance(action.created_utc, (int, float)) else int(action.created_utc.timestamp())
         ))
         
         conn.commit()
@@ -333,7 +380,11 @@ def format_content_link(action) -> str:
     if hasattr(action, 'target_title') and action.target_title:
         title = action.target_title
     elif hasattr(action, 'target_author') and action.target_author:
-        title = f"Content by u/{action.target_author}"
+        # Handle case where target_author might be string or object
+        if hasattr(action.target_author, 'name'):
+            title = f"Content by u/{action.target_author.name}"
+        else:
+            title = f"Content by u/{action.target_author}"
     else:
         title = "Unknown content"
     
@@ -348,10 +399,10 @@ def format_modlog_entry(action, config: Dict[str, Any]) -> Dict[str, str]:
     display_id = generate_display_id(action)
     
     return {
-        'time': action.created_utc.strftime('%H:%M:%S UTC'),
+        'time': get_action_datetime(action).strftime('%H:%M:%S UTC'),
         'action': action.action,
         'id': display_id,
-        'moderator': action.mod.name if action.mod else 'Unknown',
+        'moderator': get_moderator_name(action) or 'Unknown',
         'content': format_content_link(action),
         'reason': action.details or 'No reason',
         'inquire': generate_modmail_link(config['source_subreddit'], action)
@@ -385,7 +436,7 @@ def build_wiki_content(actions: List, config: Dict[str, Any]) -> str:
     # Group actions by date
     actions_by_date = {}
     for action in actions:
-        date_str = action.created_utc.strftime('%Y-%m-%d')
+        date_str = get_action_datetime(action).strftime('%Y-%m-%d')
         if date_str not in actions_by_date:
             actions_by_date[date_str] = []
         actions_by_date[date_str].append(action)
@@ -453,14 +504,24 @@ def process_modlog_actions(reddit, config: Dict[str, Any]) -> List:
         
         logger.info(f"Fetching modlog entries from /r/{config['source_subreddit']}")
         
+        # Get configurable list of actions to show in wiki
+        wiki_actions = set(config.get('wiki_actions', [
+            'removelink', 'removecomment', 'addremovalreason', 'spamlink', 'spamcomment'
+        ]))
+        
         for action in subreddit.mod.log(limit=batch_size):
-            if action.mod and action.mod.name in ignored_mods:
+            mod_name = get_moderator_name(action)
+            if mod_name and mod_name in ignored_mods:
                 continue
             
             if is_duplicate_action(action.id):
                 continue
             
-            new_actions.append(action)
+            # Only include specific action types in the wiki
+            if action.action in wiki_actions:
+                new_actions.append(action)
+            
+            # Store all actions to prevent duplicates but only add wiki-relevant ones to the list
             store_processed_action(action)
             processed_count += 1
             
