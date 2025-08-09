@@ -327,10 +327,10 @@ def get_moderator_name(action, anonymize=True):
     else:
         mod_name = action.mod.name
     
-    # Handle special cases - don't censor these
+    # Handle special cases - don't censor these, match main branch exactly
     if mod_name.lower() in ['automoderator', 'reddit']:
         if mod_name.lower() == 'automoderator':
-            return 'AutoMod'
+            return 'AutoModerator'  # Match main branch exactly
         else:
             return 'Reddit'
     
@@ -493,10 +493,22 @@ def store_processed_action(action, subreddit_name=None):
         if 'subreddit' not in columns:
             cursor.execute("ALTER TABLE processed_actions ADD COLUMN subreddit TEXT")
         
+        # Add target_author column if it doesn't exist
+        if 'target_author' not in columns:
+            cursor.execute("ALTER TABLE processed_actions ADD COLUMN target_author TEXT")
+        
+        # Extract target author
+        target_author = None
+        if hasattr(action, 'target_author') and action.target_author:
+            if hasattr(action.target_author, 'name'):
+                target_author = action.target_author.name
+            else:
+                target_author = str(action.target_author)
+        
         cursor.execute("""
             INSERT OR REPLACE INTO processed_actions 
             (action_id, action_type, moderator, target_id, target_type, 
-             display_id, target_permalink, removal_reason, created_at, subreddit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             display_id, target_permalink, removal_reason, target_author, created_at, subreddit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             action.id,
             action.action,
@@ -506,6 +518,7 @@ def store_processed_action(action, subreddit_name=None):
             generate_display_id(action),
             target_permalink,
             removal_reason,  # Store properly processed removal reason
+            target_author,
             int(action.created_utc) if isinstance(action.created_utc, (int, float)) else int(action.created_utc.timestamp()),
             subreddit_name or 'unknown'
         ))
@@ -656,17 +669,13 @@ def get_recent_actions_from_db(config: Dict[str, Any], force_all_actions: bool =
                     self.created_utc = timestamp
                     self.details = removal_reason or "No removal reason"
                     self.display_id = display_id
+                    self.target_permalink = target_permalink.replace('https://reddit.com', '') if target_permalink and target_permalink.startswith('https://reddit.com') else target_permalink
                     self.target_permalink_cached = target_permalink
                     
-                    # Set target attributes based on type
-                    if target_type == 'post':
-                        self.target_submission = target_id
-                        self.target_title = f"Post {target_id}"
-                    elif target_type == 'comment':
-                        self.target_comment = target_id
-                        self.target_title = f"Comment {target_id}"
-                    elif target_type == 'user':
-                        self.target_author = target_id
+                    # Don't set fake titles or target objects - let the main branch logic determine them
+                    # The format_content_link function will handle title generation based on actual target_author
+                    self.target_title = None
+                    self.target_author = None  # Will be determined from permalink or other data if available
                     
             mock_actions.append(MockAction(action_id, action_type, moderator, target_id, target_type, display_id, target_permalink, removal_reason, timestamp))
         
@@ -678,44 +687,39 @@ def get_recent_actions_from_db(config: Dict[str, Any], force_all_actions: bool =
         return []
 
 def format_content_link(action) -> str:
-    """Format content link for wiki table - matches main branch approach"""
+    """Format content link for wiki table - matches main branch approach exactly"""
     
-    # Determine if it's a comment (like main branch logic)
-    is_comment = False
-    permalink = None
-    if hasattr(action, 'target_permalink_cached') and action.target_permalink_cached:
-        permalink = action.target_permalink_cached
-        is_comment = bool(permalink and '/comments/' in permalink and permalink.count('/') > 6)
-    elif hasattr(action, 'target_permalink') and action.target_permalink:
-        permalink = action.target_permalink if action.target_permalink.startswith('http') else f"https://www.reddit.com{action.target_permalink}"
-        is_comment = bool(action.target_permalink and '/comments/' in action.target_permalink and action.target_permalink.count('/') > 6)
+    # Use actual Reddit API data like main branch does
+    formatted_link = ''
+    if hasattr(action, 'target_permalink') and action.target_permalink:
+        formatted_link = f"https://www.reddit.com{action.target_permalink}"
+    elif hasattr(action, 'target_permalink_cached') and action.target_permalink_cached:
+        formatted_link = action.target_permalink_cached
     
-    # Determine title like main branch
-    title = ''
+    # Check if comment using main branch logic
+    is_comment = bool(hasattr(action, 'target_permalink') and action.target_permalink 
+                     and '/comments/' in action.target_permalink and action.target_permalink.count('/') > 6)
+    
+    # Determine title using main branch approach
+    formatted_title = ''
     if is_comment and hasattr(action, 'target_title') and action.target_title:
-        title = action.target_title
+        formatted_title = action.target_title
     elif is_comment and (not hasattr(action, 'target_title') or not action.target_title):
-        # Comment without title
-        author = getattr(action, 'target_author', '[deleted]')
-        if hasattr(author, 'name'):
-            author = author.name
-        title = f"Comment by u/{author or '[deleted]'}"
+        target_author = action.target_author if hasattr(action, 'target_author') and action.target_author else '[deleted]'
+        formatted_title = f"Comment by u/{target_author}"
     elif not is_comment and hasattr(action, 'target_title') and action.target_title:
-        title = action.target_title
+        formatted_title = action.target_title
     elif not is_comment and (not hasattr(action, 'target_title') or not action.target_title):
-        # Post without title
-        author = getattr(action, 'target_author', '[deleted]')
-        if hasattr(author, 'name'):
-            author = author.name
-        title = f"Post by u/{author or '[deleted]'}"
+        target_author = action.target_author if hasattr(action, 'target_author') and action.target_author else '[deleted]'
+        formatted_title = f"Post by u/{target_author}"
     else:
-        title = 'Unknown content'
+        formatted_title = 'Unknown content'
     
-    # Only link if we have actual content URL (not user profiles)
-    if permalink and '/comments/' in permalink and '/u/' not in permalink:
-        return f"[{title}]({permalink})"
+    # Format with link like main branch
+    if formatted_link:
+        return f"[{formatted_title}]({formatted_link})"
     else:
-        return title
+        return formatted_title
 
 def extract_content_id_from_permalink(permalink):
     """Extract the actual post/comment ID from Reddit permalink URL"""
@@ -736,78 +740,38 @@ def extract_content_id_from_permalink(permalink):
     return None
 
 def format_modlog_entry(action, config: Dict[str, Any]) -> Dict[str, str]:
-    """Format modlog entry with content ID for tracking"""
+    """Format modlog entry - matches main branch approach exactly"""
     
-    # Try to get the actual Reddit content ID from the action itself first
-    display_id = None
+    # Handle removal reasons like main branch - match exact logic
+    reason_text = "-"
     
-    # Priority 1: Try to get actual post/comment IDs from Reddit objects
-    if hasattr(action, 'target_submission') and action.target_submission:
-        if hasattr(action.target_submission, 'id'):
-            display_id = f"t3_{action.target_submission.id}"
-        else:
-            # Sometimes it's a string representation
-            sub_str = str(action.target_submission)
-            if sub_str.startswith('t3_'):
-                display_id = sub_str
-            elif len(sub_str) > 3:  # Likely just the ID
-                display_id = f"t3_{sub_str}"
-    elif hasattr(action, 'target_comment') and action.target_comment:
-        if hasattr(action.target_comment, 'id'):
-            display_id = f"t1_{action.target_comment.id}"
-        else:
-            # Sometimes it's a string representation
-            comm_str = str(action.target_comment)
-            if comm_str.startswith('t1_'):
-                display_id = comm_str
-            elif len(comm_str) > 3:  # Likely just the ID
-                display_id = f"t1_{comm_str}"
-    
-    # Priority 2: Try to extract from permalink
-    if not display_id:
-        permalink = None
-        if hasattr(action, 'target_permalink_cached') and action.target_permalink_cached:
-            permalink = action.target_permalink_cached
-        elif hasattr(action, 'target_permalink') and action.target_permalink:
-            permalink = action.target_permalink if action.target_permalink.startswith('http') else f"https://www.reddit.com{action.target_permalink}"
-        
-        if permalink:
-            content_id = extract_content_id_from_permalink(permalink)
-            display_id = content_id if content_id else None
-    
-    # Priority 3: Try to use stored target_id if it looks like content
-    if not display_id and hasattr(action, 'target_id') and action.target_id:
-        target_id = str(action.target_id)
-        # If target_id looks like a Reddit ID, use it
-        if len(target_id) >= 6 and not target_id.startswith('ModAction'):
-            if action.action in ['removelink', 'spamlink']:
-                display_id = f"t3_{target_id}" if not target_id.startswith('t3_') else target_id
-            elif action.action in ['removecomment', 'spamcomment']:  
-                display_id = f"t1_{target_id}" if not target_id.startswith('t1_') else target_id
-    
-    # Priority 4: If no content ID available, show empty (so removals can't be linked)
-    if not display_id:
-        display_id = "-"  # No linkable content ID available
-    
-    # Handle removal reasons properly - ALWAYS prefer mod_note over numeric details
-    reason_text = "No reason"
-    
-    # First priority: mod_note (actual removal reason text)
+    # Get mod note first (like main branch parsed_mod_note)
+    parsed_mod_note = ''
     if hasattr(action, 'mod_note') and action.mod_note:
-        reason_text = str(action.mod_note).strip()
-    # Second priority: details (but only if it's not just a number)
-    elif hasattr(action, 'details') and action.details:
-        details_str = str(action.details).strip()
-        if not details_str.isdigit():
-            reason_text = details_str
-        # If it's just a number, show generic message instead of "Removal reason #7"
-        else:
-            reason_text = "Removal reason applied"
+        parsed_mod_note = str(action.mod_note).strip()
+    elif hasattr(action, 'description') and action.description:
+        parsed_mod_note = str(action.description).strip()
+    
+    # Process details like main branch
+    if hasattr(action, 'details') and action.details:
+        reason_text = str(action.details).strip()
+        # For addremovalreason, use mod_note instead of details (main branch logic)
+        if action.action in ['addremovalreason']:
+            reason_text = parsed_mod_note if parsed_mod_note else reason_text
+    elif parsed_mod_note:
+        reason_text = parsed_mod_note
+    
+    # Extract content ID for tracking
+    content_id = "-"
+    if hasattr(action, 'target_permalink') and action.target_permalink:
+        extracted_id = extract_content_id_from_permalink(action.target_permalink)
+        if extracted_id:
+            content_id = extracted_id.replace('t3_', '').replace('t1_', '')[:8]  # Short ID for table
     
     return {
         'time': get_action_datetime(action).strftime('%H:%M:%S UTC'),
         'action': action.action,
-        'id': display_id,
+        'id': content_id,
         'moderator': get_moderator_name(action, config.get('anonymize_moderators', True)) or 'Unknown',
         'content': format_content_link(action),
         'reason': reason_text,
@@ -898,7 +862,7 @@ def build_wiki_content(actions: List, config: Dict[str, Any]) -> str:
             actions_by_date[date_str] = []
         actions_by_date[date_str].append(action)
     
-    # Build content
+    # Build content - include ID column for tracking actions across the table
     content_parts = []
     for date_str in sorted(actions_by_date.keys(), reverse=True):
         content_parts.append(f"## {date_str}")
@@ -907,7 +871,7 @@ def build_wiki_content(actions: List, config: Dict[str, Any]) -> str:
         
         for action in sorted(actions_by_date[date_str], key=lambda x: x.created_utc, reverse=True):
             entry = format_modlog_entry(action, config)
-            content_parts.append(f"| {entry['time']} | {entry['action']} | `{entry['id']}` | {entry['moderator']} | {entry['content']} | {entry['reason']} | {entry['inquire']} |")
+            content_parts.append(f"| {entry['time']} | {entry['action']} | {entry['id']} | {entry['moderator']} | {entry['content']} | {entry['reason']} | {entry['inquire']} |")
         
         content_parts.append("")  # Empty line between dates
     
