@@ -681,17 +681,17 @@ def get_recent_actions_from_db(config: Dict[str, Any], force_all_actions: bool =
         # Convert database rows to mock action objects for compatibility with existing functions
         mock_actions = []
         for row in rows:
-            action_id, action_type, moderator, target_id, target_type, display_id, target_permalink, removal_reason, target_author, timestamp = row
-            logger.debug(f"Processing cached action: {action_type} by {moderator} at {timestamp}")
+            action_id, action_type, moderator, target_id, target_type, display_id, target_permalink, removal_reason, target_author, created_at = row
+            logger.debug(f"Processing cached action: {action_type} by {moderator} at {created_at}")
             
             # Create a mock action object with the data we have
             class MockAction:
-                def __init__(self, action_id, action_type, moderator, target_id, target_type, display_id, target_permalink, removal_reason, target_author, timestamp):
+                def __init__(self, action_id, action_type, moderator, target_id, target_type, display_id, target_permalink, removal_reason, target_author, created_at):
                     self.id = action_id
                     self.action = action_type
                     self.mod = moderator
-                    # Use the timestamp directly
-                    self.created_utc = timestamp
+                    # Use the created_at directly
+                    self.created_utc = created_at
                     self.details = removal_reason
                     self.display_id = display_id
                     self.target_permalink = target_permalink.replace('https://reddit.com', '') if target_permalink and target_permalink.startswith('https://reddit.com') else target_permalink
@@ -701,7 +701,7 @@ def get_recent_actions_from_db(config: Dict[str, Any], force_all_actions: bool =
                     self.target_title = None
                     self.target_author = target_author  # Use actual target_author from database
                     
-            mock_actions.append(MockAction(action_id, action_type, moderator, target_id, target_type, display_id, target_permalink, removal_reason, target_author, timestamp))
+            mock_actions.append(MockAction(action_id, action_type, moderator, target_id, target_type, display_id, target_permalink, removal_reason, target_author, created_at))
         
         logger.info(f"Retrieved {len(mock_actions)} actions from database for force refresh")
         return mock_actions
