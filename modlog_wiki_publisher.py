@@ -473,20 +473,55 @@ def process_modlog_actions(reddit, config: Dict[str, Any]) -> List:
         logger.error(f"Error processing modlog actions: {e}")
         raise
 
-def load_config(config_path: str) -> Dict[str, Any]:
+def load_config(config_path: str, auto_update: bool = True) -> Dict[str, Any]:
     """Load and validate configuration"""
     try:
-        with open(config_path, 'r') as f:
-            config = json.load(f)
+        # Load existing config
+        original_config = {}
+        config_updated = False
+        
+        try:
+            with open(config_path, 'r') as f:
+                original_config = json.load(f)
+        except FileNotFoundError:
+            logger.error(f"Config file not found: {config_path}")
+            raise
+        
+        # Store original config for comparison
+        config_before = original_config.copy()
         
         # Apply defaults and validate limits
-        config = apply_config_defaults_and_limits(config)
+        config = apply_config_defaults_and_limits(original_config)
+        
+        # Check if any new defaults were added
+        for key, limits in CONFIG_LIMITS.items():
+            if key not in config_before:
+                config_updated = True
+                logger.info(f"Added new configuration field '{key}' with default value: {limits['default']}")
+        
+        # Auto-update config file if new defaults were added and auto_update is enabled
+        if config_updated and auto_update:
+            try:
+                # Create backup of original config
+                backup_path = f"{config_path}.backup"
+                import shutil
+                shutil.copy2(config_path, backup_path)
+                logger.info(f"Created backup of original config: {backup_path}")
+                
+                # Write updated config
+                with open(config_path, 'w') as f:
+                    json.dump(config, f, indent=2)
+                logger.info(f"Auto-updated config file '{config_path}' with new defaults")
+                
+            except Exception as e:
+                logger.warning(f"Could not auto-update config file: {e}")
+                logger.info("Configuration will still work with in-memory defaults")
+        elif config_updated and not auto_update:
+            logger.info("Config file updates available but auto-update disabled. Run without --no-auto-update-config to update.")
         
         logger.info("Configuration loaded and validated successfully")
         return config
-    except FileNotFoundError:
-        logger.error(f"Config file not found: {config_path}")
-        raise
+        
     except json.JSONDecodeError as e:
         logger.error(f"Invalid JSON in config file: {e}")
         raise
@@ -545,6 +580,10 @@ def create_argument_parser():
     parser.add_argument(
         '--force-migrate', action='store_true',
         help='Force database migration (use with caution)'
+    )
+    parser.add_argument(
+        '--no-auto-update-config', action='store_true',
+        help='Disable automatic config file updates'
     )
     
     return parser
@@ -639,7 +678,7 @@ def main():
         
         setup_database()
         
-        config = load_config(args.config)
+        config = load_config(args.config, auto_update=not args.no_auto_update_config)
         
         # Override config with CLI args
         if args.source_subreddit:

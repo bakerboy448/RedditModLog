@@ -84,12 +84,17 @@ Create `config.json`:
 | `--debug` | – | Enable verbose output | false | - | - |
 | `--show-config-limits` | – | Show configuration limits and defaults | false | - | - |
 | `--force-migrate` | – | Force database migration | false | - | - |
+| `--no-auto-update-config` | – | Disable automatic config file updates | false | - | - |
 
 CLI values override config file values.
 
 ## Configuration Limits
 
 All configuration values are automatically validated and enforced within safe limits. Use `--show-config-limits` to see current limits and defaults.
+
+## Automatic Config Updates
+
+The application automatically updates your config file when new configuration options are added, while preserving your existing settings. A backup is created before any changes. Use `--no-auto-update-config` to disable this behavior.
 
 ## Database Migration
 
