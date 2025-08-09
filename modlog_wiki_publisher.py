@@ -542,12 +542,27 @@ class ModlogWikiPublisher:
             else:
                 p_mod_name = 'HumanModerator'
         
-        # Process details
-        p_details = ''
-        if entry.details:
-            p_details = entry.details.strip()
-            if action_type in ['addremovalreason']:
-                p_details = parsed_mod_note.strip()
+        # Process removal reason with improved fallback logic
+        removal_reason = ''
+        
+        # Special case for addremovalreason action - always prefer mod_note
+        if action_type == 'addremovalreason':
+            removal_reason = parsed_mod_note if parsed_mod_note else "No removal reason provided"
+        # For other removal actions, try multiple sources for the reason
+        elif action_type in self.REMOVAL_ACTIONS:
+            # Try entry.details first (primary source for removal reasons)
+            if hasattr(entry, 'details') and entry.details and entry.details.strip():
+                removal_reason = entry.details.strip()
+            # Fall back to mod_note/description if details is empty
+            elif parsed_mod_note:
+                removal_reason = parsed_mod_note
+            # Default fallback for removal actions
+            else:
+                removal_reason = "No removal reason provided"
+        else:
+            # For non-removal actions, use details if available
+            if hasattr(entry, 'details') and entry.details:
+                removal_reason = entry.details.strip()
         
         # Check if comment (improved detection)
         is_comment = bool(entry.target_permalink and '/comments/' in entry.target_permalink 
@@ -577,7 +592,7 @@ class ModlogWikiPublisher:
             'action_type': action_type,
             'moderator': self.sanitize_for_table(p_mod_name),
             'target_author': self.sanitize_for_table(entry.target_author or '[deleted]'),
-            'removal_reason': self.sanitize_for_table(p_details),
+            'removal_reason': self.sanitize_for_table(removal_reason),
             'note': self.sanitize_for_table(parsed_mod_note),
             'title': self.sanitize_for_table(formatted_title),
             'url': formatted_link  # URLs don't need sanitization
@@ -653,8 +668,18 @@ class ModlogWikiPublisher:
         else:
             title = f"{entry['title']}"
 
-        # Format removal reason
-        reason = entry['removal_reason'] or entry['note'] or '-'
+        # Format removal reason with improved handling
+        reason = entry['removal_reason']
+        if not reason or reason.strip() == '':
+            # Check if this is a removal action that should have a reason
+            if entry['action_type'] in ['removelink', 'removecomment', 'spamlink', 'spamcomment', 
+                                        'removepost', 'removecontent', 'addremovalreason']:
+                reason = "No removal reason provided"
+            else:
+                # For non-removal actions, check note field or use dash
+                reason = entry.get('note', '') or '-'
+        elif reason == '-':
+            reason = '-'
         
         # Format inquire link
         if entry['modmail_url']:
