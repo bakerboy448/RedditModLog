@@ -43,10 +43,13 @@ python debug_auth.py
 ### Database Operations
 ```bash
 # View recent processed actions with removal reasons
-sqlite3 modlog.db "SELECT action_id, action_type, moderator, removal_reason, created_at FROM processed_actions ORDER BY created_at DESC LIMIT 10;"
+sqlite3 modlog.db "SELECT action_id, action_type, moderator, removal_reason, subreddit, created_at FROM processed_actions ORDER BY created_at DESC LIMIT 10;"
 
-# View all columns including new removal_reason column
-sqlite3 modlog.db "SELECT * FROM processed_actions ORDER BY created_at DESC LIMIT 10;"
+# View actions by subreddit
+sqlite3 modlog.db "SELECT action_type, moderator, target_author, removal_reason FROM processed_actions WHERE subreddit = 'usenet' ORDER BY created_at DESC LIMIT 5;"
+
+# Track content lifecycle by target ID  
+sqlite3 modlog.db "SELECT target_id, action_type, moderator, removal_reason, datetime(created_at, 'unixepoch') FROM processed_actions WHERE target_id LIKE '%1mkz4jm%' ORDER BY created_at;"
 
 # Manual cleanup of old entries
 sqlite3 modlog.db "DELETE FROM processed_actions WHERE created_at < date('now', '-30 days');"
@@ -72,7 +75,10 @@ The application supports both JSON config files and CLI arguments (CLI overrides
 
 **Database Storage**:
 - All moderator names are stored as actual usernames in the database regardless of display setting
-- Removal reasons from the Reddit API are now stored in the `removal_reason` column
+- Removal reasons from the Reddit API are stored in the `removal_reason` column with intelligent text/number handling
+- Target authors are stored in the `target_author` column for proper content attribution
+- Multi-subreddit support with `subreddit` column for data separation
+- Content IDs are extracted from permalinks and stored for tracking
 
 ## Authentication Requirements
 
@@ -102,6 +108,28 @@ Use `--test` flag to verify configuration and Reddit API connectivity without ma
 - No link at all if no actual content is available
 
 User profile links are a privacy concern and not useful for modlog purposes.
+
+## Recent Improvements (v2.0)
+
+**Content Linking Fixes**:
+- ✅ Content links now point to actual Reddit posts/comments, never user profiles
+- ✅ Proper content titles extracted from Reddit API data
+- ✅ Short content IDs (e.g., "1mkz4jm") for easy action tracking
+
+**Removal Reason Handling**:
+- ✅ Prioritizes actual removal reason text over numbers
+- ✅ For `addremovalreason` actions, shows mod_note text instead of numeric details
+- ✅ Intelligent handling of text vs numeric removal reasons
+
+**Moderator Display**:
+- ✅ AutoModerator displays as "AutoModerator" (not anonymized)
+- ✅ Configurable anonymization for human moderators
+- ✅ Proper handling of Reddit admin actions
+
+**Multi-Subreddit Support**:
+- ✅ Single database supports multiple subreddits with proper data separation
+- ✅ Per-subreddit wiki updates without cross-contamination
+- ✅ Subreddit-specific logging and error handling
 
 ## Common Issues
 

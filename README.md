@@ -4,16 +4,18 @@ Automatically publishes Reddit moderation logs to a subreddit wiki page with mod
 
 ## Features
 
-* 📊 Publishes modlogs as organized markdown tables
+* 📊 Publishes modlogs as organized markdown tables with content tracking IDs
 * 📧 Pre-populated modmail links for removal inquiries (formatted as clickable markdown links)
-* 🗄️ SQLite database for deduplication and retention
+* 🗄️ SQLite database for deduplication and retention with multi-subreddit support
 * ⏰ Configurable update intervals
 * 🔒 Automatic cleanup of old entries
 * ⚡ Handles Reddit's 524KB wiki size limit
 * 🧩 Fully CLI-configurable (no need to edit `config.json`)
 * 📁 Per-subreddit log files for debugging
-* 🔒 Configurable moderator anonymization
-* 📝 Stores removal reasons from Reddit API in database
+* 🔒 Configurable moderator anonymization (AutoModerator/HumanModerator)
+* 📝 Stores removal reasons from Reddit API with intelligent text/number handling
+* 🔗 Links directly to actual content (posts/comments), never user profiles
+* 🆔 Short content IDs extracted from permalinks for easy action tracking
 
 ## Quick Start
 
@@ -108,11 +110,12 @@ The database will automatically migrate to the latest schema version on startup.
 Sample wiki table output:
 
 ```markdown
-## 2025-01-15
+## 2025-08-08
 
 | Time | Action | ID | Moderator | Content | Reason | Inquire |
 |------|--------|----|-----------|---------|--------|---------|
-| 14:25:33 UTC | removepost | `P1a2b3c` | HumanModerator | [Post Title](url) | spam | [Inquire](modmail_url) |
+| 23:19:35 UTC | removecomment | 1mkz4jm | AutoModerator | [Comment by u/potherb85](https://www.reddit.com/r/usenet/comments/1mkz4jm/usenet_in_china/n7otf1f/) | Filter - Possible Non Usenet related [proxy], review/approve manually | [Contact Mods](https://www.reddit.com/message/compose?to=/r/usenet&subject=Comment%20Removal%20Inquiry%20-%20Content%20by%20u/potherb85...) |
+| 22:33:36 UTC | addremovalreason | 1mkyw13 | HumanModerator | [How can I verify if NewsLazer is actually using SSL?](https://www.reddit.com/r/usenet/comments/1mkyw13/how_can_i_verify_if_newslazer_is_actually_using/) | No Discussions About Usenet Automation Software | [Contact Mods](https://www.reddit.com/message/compose?to=/r/usenet&subject=Removal%20Reason...) |
 ```
 
 ## Logging
@@ -149,16 +152,19 @@ Uses `modlog.db` (SQLite) for deduplication and history:
 
 ```bash
 # View recent actions with removal reasons
-sqlite3 modlog.db "SELECT action_id, action_type, moderator, removal_reason, created_at FROM processed_actions ORDER BY created_at DESC LIMIT 10;"
+sqlite3 modlog.db "SELECT action_id, action_type, moderator, removal_reason, subreddit, created_at FROM processed_actions ORDER BY created_at DESC LIMIT 10;"
 
-# View all columns including removal reasons
+# View all columns including removal reasons and target author
 sqlite3 modlog.db "SELECT * FROM processed_actions ORDER BY created_at DESC LIMIT 10;"
 
-# View actions by content ID
-sqlite3 modlog.db "SELECT display_id, action_type, moderator, removal_reason, datetime(created_at, 'unixepoch') FROM processed_actions WHERE display_id = 'P1a2b3c';"
+# View actions by subreddit
+sqlite3 modlog.db "SELECT action_type, moderator, target_author, removal_reason FROM processed_actions WHERE subreddit = 'usenet' ORDER BY created_at DESC LIMIT 5;"
 
-# Track content lifecycle
-sqlite3 modlog.db "SELECT target_id, action_type, moderator, removal_reason, datetime(created_at, 'unixepoch') FROM processed_actions WHERE target_id = '1a2b3c' ORDER BY created_at;"
+# Track content lifecycle by target ID
+sqlite3 modlog.db "SELECT target_id, action_type, moderator, removal_reason, datetime(created_at, 'unixepoch') FROM processed_actions WHERE target_id LIKE '%1mkz4jm%' ORDER BY created_at;"
+
+# View removal reasons that are text (not numbers)
+sqlite3 modlog.db "SELECT action_type, removal_reason FROM processed_actions WHERE removal_reason NOT LIKE '%[0-9]%' AND removal_reason != 'remove' LIMIT 5;"
 
 # Clean manually
 sqlite3 modlog.db "DELETE FROM processed_actions WHERE created_at < date('now', '-30 days');"
