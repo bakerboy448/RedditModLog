@@ -94,6 +94,15 @@ The bot account needs:
 
 Use `--test` flag to verify configuration and Reddit API connectivity without making changes.
 
+## Content Link Guidelines
+
+**CRITICAL**: Content links in the modlog should NEVER point to user profiles (`/u/username`). Links should only point to:
+- Actual removed posts (`/comments/postid/`)  
+- Actual removed comments (`/comments/postid/_/commentid/`)
+- No link at all if no actual content is available
+
+User profile links are a privacy concern and not useful for modlog purposes.
+
 ## Common Issues
 
 - 401 errors: Check app type is "script" and verify client_id/client_secret

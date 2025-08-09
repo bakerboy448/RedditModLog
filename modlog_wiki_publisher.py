@@ -398,13 +398,13 @@ def generate_display_id(action):
         return f"{prefix}{target_id}"
 
 def get_target_permalink(action):
-    """Get permalink for the target content"""
+    """Get permalink for the target content - prioritize actual content over user profiles"""
     # Check if we have a cached permalink from database
     if hasattr(action, 'target_permalink_cached') and action.target_permalink_cached:
         return action.target_permalink_cached
     
     try:
-        # Priority: get actual post/comment permalinks
+        # Priority 1: get actual post/comment permalinks from Reddit API
         if hasattr(action, 'target_submission') and action.target_submission:
             if hasattr(action.target_submission, 'permalink'):
                 return f"https://reddit.com{action.target_submission.permalink}"
@@ -414,14 +414,21 @@ def get_target_permalink(action):
         elif hasattr(action, 'target_comment') and action.target_comment:
             if hasattr(action.target_comment, 'permalink'):
                 return f"https://reddit.com{action.target_comment.permalink}"
+            elif hasattr(action.target_comment, 'id') and hasattr(action.target_comment, 'submission'):
+                # For comments, construct proper permalink with submission ID
+                return f"https://reddit.com/comments/{action.target_comment.submission.id}/_/{action.target_comment.id}/"
             elif hasattr(action.target_comment, 'id'):
-                # For comments, we need the submission ID too - best effort
+                # Fallback for comment without submission info
                 return f"https://reddit.com/comments/{action.target_comment.id}/"
-        elif hasattr(action, 'target_author') and action.target_author:
-            if hasattr(action.target_author, 'name'):
-                return f"https://reddit.com/u/{action.target_author.name}"
-            else:
-                return f"https://reddit.com/u/{action.target_author}"
+        
+        # Priority 2: Try to get content permalink from action.target_permalink if it's not a user profile
+        if hasattr(action, 'target_permalink') and action.target_permalink:
+            permalink = action.target_permalink
+            # Only use if it's actual content (contains /comments/) not user profile (/u/)
+            if '/comments/' in permalink and '/u/' not in permalink:
+                return f"https://reddit.com{permalink}" if not permalink.startswith('http') else permalink
+        
+        # NEVER fall back to user profiles - only link to actual content
     except:
         pass
     return None
@@ -694,16 +701,39 @@ def format_content_link(action) -> str:
     
     return f"[{title}]({permalink})"
 
-def format_modlog_entry(action, config: Dict[str, Any]) -> Dict[str, str]:
-    """Format modlog entry with permalink-based ID for tracking"""
+def extract_content_id_from_permalink(permalink):
+    """Extract the actual post/comment ID from Reddit permalink URL"""
+    if not permalink:
+        return None
     
-    # Use permalink as the primary ID for markdown table, like main branch
+    import re
+    # Extract post ID from URLs like /comments/abc123/ or https://reddit.com/comments/abc123/
+    post_match = re.search(r'/comments/([a-zA-Z0-9]+)/', permalink)
+    if post_match:
+        return f"t3_{post_match.group(1)}"
+    
+    # Extract comment ID from URLs like /comments/abc123/comment/def456/
+    comment_match = re.search(r'/comments/[a-zA-Z0-9]+/[^/]*/([a-zA-Z0-9]+)/?', permalink)
+    if comment_match:
+        return f"t1_{comment_match.group(1)}"
+    
+    return None
+
+def format_modlog_entry(action, config: Dict[str, Any]) -> Dict[str, str]:
+    """Format modlog entry with content ID for tracking"""
+    
+    # Extract the actual content ID from permalink
+    permalink = None
     if hasattr(action, 'target_permalink_cached') and action.target_permalink_cached:
-        display_id = action.target_permalink_cached
+        permalink = action.target_permalink_cached
     elif hasattr(action, 'target_permalink') and action.target_permalink:
-        display_id = f"https://www.reddit.com{action.target_permalink}"
+        permalink = action.target_permalink if action.target_permalink.startswith('http') else f"https://www.reddit.com{action.target_permalink}"
+    
+    # Use the extracted content ID as display_id
+    if permalink:
+        content_id = extract_content_id_from_permalink(permalink)
+        display_id = content_id if content_id else generate_display_id(action)
     else:
-        # Fallback to generated display ID if no permalink available
         display_id = generate_display_id(action)
     
     # Handle removal reasons properly - check for numeric reasons
@@ -728,19 +758,55 @@ def format_modlog_entry(action, config: Dict[str, Any]) -> Dict[str, str]:
     }
 
 def generate_modmail_link(subreddit: str, action) -> str:
-    """Generate modmail link for user inquiries"""
-    subject = f"Inquiry about moderation action"
-    
-    if hasattr(action, 'target_title') and action.target_title:
-        content_desc = action.target_title[:50]
-    else:
-        content_desc = "your content"
-    
-    body = f"I would like to inquire about the {action.action} action on {content_desc}"
-    
+    """Generate modmail link for user inquiries - matches main branch format"""
     from urllib.parse import quote
-    url = f"https://reddit.com/message/compose?to=/r/{subreddit}&subject={quote(subject)}&message={quote(body)}"
-    return f"[Inquire]({url})"
+    
+    # Determine removal type like main branch
+    type_map = {
+        'removelink': 'Post',
+        'removepost': 'Post', 
+        'removecomment': 'Comment',
+        'spamlink': 'Spam Post',
+        'spamcomment': 'Spam Comment',
+        'removecontent': 'Content',
+        'addremovalreason': 'Removal Reason',
+    }
+    removal_type = type_map.get(action.action, 'Content')
+    
+    # Get title and truncate if needed
+    if hasattr(action, 'target_title') and action.target_title:
+        title = action.target_title
+    else:
+        title = f"Content by u/{action.target_author}" if hasattr(action, 'target_author') and action.target_author else "Unknown content"
+    
+    # Truncate title if too long
+    max_title_length = 50
+    if len(title) > max_title_length:
+        title = title[:max_title_length-3] + "..."
+    
+    # Get URL
+    url = ""
+    if hasattr(action, 'target_permalink_cached') and action.target_permalink_cached:
+        url = action.target_permalink_cached
+    elif hasattr(action, 'target_permalink') and action.target_permalink:
+        url = f"https://www.reddit.com{action.target_permalink}" if not action.target_permalink.startswith('http') else action.target_permalink
+    
+    # Create subject line like main branch
+    subject = f"{removal_type} Removal Inquiry - {title}"
+    
+    # Create body like main branch
+    body = (
+        f"Hello Moderators of /r/{subreddit},\n\n"
+        f"I would like to inquire about the recent removal of the following {removal_type.lower()}:\n\n"
+        f"**Title:** {title}\n\n"
+        f"**Action Type:** {action.action}\n\n"
+        f"**Link:** {url}\n\n"
+        "Please provide details regarding this action.\n\n"
+        "Thank you!"
+    )
+    
+    modmail_url = f"https://www.reddit.com/message/compose?to=/r/{subreddit}&subject={quote(subject)}&message={quote(body)}"
+    return f"[Contact Mods]({modmail_url})"
 
 def build_wiki_content(actions: List, config: Dict[str, Any]) -> str:
     """Build wiki page content from actions"""
@@ -752,9 +818,9 @@ def build_wiki_content(actions: List, config: Dict[str, Any]) -> str:
     mixed_subreddits = set()
     
     for action in actions:
-        # Check if action has subreddit info and if it matches
+        # Check if action has subreddit info and if it matches (case-insensitive)
         if hasattr(action, 'subreddit') and action.subreddit:
-            if action.subreddit != target_subreddit:
+            if action.subreddit.lower() != target_subreddit.lower():
                 mixed_subreddits.add(action.subreddit)
     
     if mixed_subreddits:
