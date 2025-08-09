@@ -631,7 +631,7 @@ def get_recent_actions_from_db(config: Dict[str, Any], force_all_actions: bool =
         action_count = cursor.fetchone()[0]
         
         # If no actions exist for this subreddit, return empty list
-        if action_count == 0:
+        if not force and action_count == 0:
             logger.info(f"No actions found for subreddit '{subreddit_name}' in the specified time range")
             conn.close()
             return []
@@ -679,7 +679,7 @@ def get_recent_actions_from_db(config: Dict[str, Any], force_all_actions: bool =
                     self.mod = moderator
                     # Use the timestamp directly
                     self.created_utc = timestamp
-                    self.details = removal_reason or "No removal reason"
+                    self.details = removal_reason or "No removal reason found."
                     self.display_id = display_id
                     self.target_permalink = target_permalink.replace('https://reddit.com', '') if target_permalink and target_permalink.startswith('https://reddit.com') else target_permalink
                     self.target_permalink_cached = target_permalink
@@ -728,9 +728,8 @@ def format_content_link(action) -> str:
     
     # Format with link like main branch
     if formatted_link:
-        return f"[{formatted_title}]({formatted_link})"
-    else:
-        return formatted_title
+        formatted_title = f"[{formatted_title}]({formatted_link})"
+    return formatted_title.replace("|"," ")
 
 def extract_content_id_from_permalink(permalink):
     """Extract the actual post/comment ID from Reddit permalink URL"""
@@ -785,7 +784,7 @@ def format_modlog_entry(action, config: Dict[str, Any]) -> Dict[str, str]:
         'id': content_id,
         'moderator': get_moderator_name(action, config.get('anonymize_moderators', True)) or 'Unknown',
         'content': format_content_link(action),
-        'reason': reason_text,
+        'reason': reason_text.replace("|"," ")
         'inquire': generate_modmail_link(config['source_subreddit'], action)
     }
 
