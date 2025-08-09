@@ -19,6 +19,8 @@ import praw
 
 DB_PATH = "modlog.db"
 LOGS_DIR = "logs"
+BASE_BACKOFF_WAIT = 30
+MAX_BACKOFF_WAIT = 300
 logger = logging.getLogger(__name__)
 
 # Configuration limits and defaults
@@ -309,6 +311,12 @@ def censor_email_addresses(text):
     # Replace email addresses with [EMAIL]
     return re.sub(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', '[EMAIL]', text)
 
+def sanitize_for_markdown(text: str) -> str:
+    """Sanitize text for use in markdown tables by escaping pipe characters"""
+    if text is None:
+        return ""
+    return str(text).replace("|", " ")
+
 def get_action_datetime(action):
     """Convert action.created_utc to datetime object regardless of input type"""
     if isinstance(action.created_utc, (int, float)):
@@ -516,7 +524,7 @@ def store_processed_action(action, subreddit_name=None):
             get_target_type(action),
             generate_display_id(action),
             target_permalink,
-            removal_reason.replace("|"," ") if removal_reason is not None else None,  # Store properly processed removal reason
+            sanitize_for_markdown(removal_reason),  # Store properly processed removal reason
             target_author,
             int(action.created_utc) if isinstance(action.created_utc, (int, float)) else int(action.created_utc.timestamp()),
             subreddit_name or 'unknown'
@@ -728,7 +736,7 @@ def format_content_link(action) -> str:
     # Format with link like main branch
     if formatted_link:
         formatted_title = f"[{formatted_title}]({formatted_link})"
-    return formatted_title.replace("|"," ")
+    return sanitize_for_markdown(formatted_title)
 
 def extract_content_id_from_permalink(permalink):
     """Extract the actual post/comment ID from Reddit permalink URL"""
@@ -783,7 +791,7 @@ def format_modlog_entry(action, config: Dict[str, Any]) -> Dict[str, str]:
         'id': content_id,
         'moderator': get_moderator_name(action, config.get('anonymize_moderators', True)) or 'Unknown',
         'content': format_content_link(action),
-        'reason': str(reason_text).replace("|"," "),
+        'reason': sanitize_for_markdown(str(reason_text)),
         'inquire': generate_modmail_link(config['source_subreddit'], action)
     }
 
@@ -1158,6 +1166,7 @@ def run_continuous_mode(reddit, config: Dict[str, Any], force: bool = False):
     
     error_count = 0
     max_errors = config.get('max_continuous_errors', CONFIG_LIMITS['max_continuous_errors']['default'])
+    first_run_force = force
     
     while True:
         try:
