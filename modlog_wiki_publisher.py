@@ -567,16 +567,23 @@ def cleanup_old_entries(retention_days: int):
     except Exception as e:
         logger.error(f"Error during cleanup: {e}")
 
-def get_recent_actions_from_db(config: Dict[str, Any]) -> List:
+def get_recent_actions_from_db(config: Dict[str, Any], force_all_actions: bool = False) -> List:
     """Fetch recent actions from database for force refresh"""
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
-        # Get configurable list of actions to show in wiki
-        wiki_actions = set(config.get('wiki_actions', [
-            'removelink', 'removecomment', 'addremovalreason', 'spamlink', 'spamcomment'
-        ]))
+        # For force refresh, get ALL actions, not just wiki_actions filter
+        if force_all_actions:
+            # Get all unique action types in database
+            cursor.execute("SELECT DISTINCT action_type FROM processed_actions WHERE action_type IS NOT NULL")
+            wiki_actions = set(row[0] for row in cursor.fetchall())
+            logger.info(f"Force refresh: including all action types: {wiki_actions}")
+        else:
+            # Get configurable list of actions to show in wiki
+            wiki_actions = set(config.get('wiki_actions', [
+                'removelink', 'removecomment', 'addremovalreason', 'spamlink', 'spamcomment'
+            ]))
         
         # Get recent actions within retention period
         retention_days = config.get('retention_days', CONFIG_LIMITS['retention_days']['default'])
@@ -867,13 +874,13 @@ def process_modlog_actions(reddit, config: Dict[str, Any]) -> List:
             if is_duplicate_action(action.id):
                 continue
             
-            # Only include specific action types in the wiki
-            if action.action in wiki_actions:
-                new_actions.append(action)
-            
-            # Store all actions to prevent duplicates but only add wiki-relevant ones to the list
+            # Store ALL actions to database to prevent duplicates
             store_processed_action(action, config['source_subreddit'])
             processed_count += 1
+            
+            # Only include specific action types in the wiki display
+            if action.action in wiki_actions:
+                new_actions.append(action)
             
             if processed_count >= batch_size:
                 break
@@ -1125,16 +1132,22 @@ def main():
             return
         
         if args.force_refresh:
-            logger.info("Force refresh requested - rebuilding wiki from database...")
-            actions = get_recent_actions_from_db(config)
+            logger.info("Force refresh requested - fetching all modlog actions and rebuilding wiki...")
+            # First, fetch all recent modlog actions to populate database
+            logger.info("Step 1: Fetching all modlog actions from Reddit...")
+            process_modlog_actions(reddit, config)
+            
+            # Then rebuild wiki from database (showing only removal actions)
+            logger.info("Step 2: Rebuilding wiki from database...")
+            actions = get_recent_actions_from_db(config, force_all_actions=False)
             if actions:
-                logger.info(f"Found {len(actions)} actions in database for wiki refresh")
+                logger.info(f"Found {len(actions)} removal actions in database for wiki")
                 content = build_wiki_content(actions, config)
                 wiki_page = config.get('wiki_page', 'modlog')
                 update_wiki_page(reddit, config['source_subreddit'], wiki_page, content, force=True)
                 logger.info("Wiki page force refresh completed")
             else:
-                logger.warning("No actions found in database for wiki refresh")
+                logger.warning("No removal actions found in database for wiki refresh")
             return
         
         # Process modlog actions
