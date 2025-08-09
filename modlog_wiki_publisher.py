@@ -1257,7 +1257,7 @@ def main():
                 logger.info(f"Found {len(actions)} removal actions in database for wiki")
                 content = build_wiki_content(actions, config)
                 wiki_page = config.get('wiki_page', 'modlog')
-                update_wiki_page(reddit, config['source_subreddit'], wiki_page, content, force=True)
+                update_wiki_page(reddit, config['source_subreddit'], wiki_page, content, force=args.force_wiki)
                 logger.info("Wiki page completely rebuilt from database")
             else:
                 logger.warning("No removal actions found in database for wiki refresh")
