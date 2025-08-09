@@ -354,6 +354,11 @@ def store_processed_action(action):
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
+        # Process removal reason properly like in main branch
+        removal_reason = None
+        if action.details:
+            removal_reason = action.details.strip()
+        
         cursor.execute("""
             INSERT OR REPLACE INTO processed_actions 
             (action_id, action_type, moderator, target_id, target_type, 
@@ -366,7 +371,7 @@ def store_processed_action(action):
             get_target_type(action),
             generate_display_id(action),
             get_target_permalink(action),
-            action.details or None,  # Store removal reason from API
+            removal_reason,  # Store properly processed removal reason
             int(action.created_utc) if isinstance(action.created_utc, (int, float)) else int(action.created_utc.timestamp())
         ))
         
@@ -422,10 +427,10 @@ def get_recent_actions_from_db(config: Dict[str, Any]) -> List:
         placeholders = ','.join(['?'] * len(wiki_actions))
         query = f"""
             SELECT action_id, action_type, moderator, target_id, target_type, 
-                   display_id, target_permalink, timestamp 
+                   display_id, target_permalink, removal_reason, created_at 
             FROM processed_actions 
-            WHERE timestamp >= ? AND action_type IN ({placeholders})
-            ORDER BY timestamp DESC 
+            WHERE created_at >= ? AND action_type IN ({placeholders})
+            ORDER BY created_at DESC 
             LIMIT ?
         """
         
@@ -438,18 +443,18 @@ def get_recent_actions_from_db(config: Dict[str, Any]) -> List:
         # Convert database rows to mock action objects for compatibility with existing functions
         mock_actions = []
         for row in rows:
-            action_id, action_type, moderator, target_id, target_type, display_id, target_permalink, timestamp = row
+            action_id, action_type, moderator, target_id, target_type, display_id, target_permalink, removal_reason, timestamp = row
             logger.debug(f"Processing cached action: {action_type} by {moderator} at {timestamp}")
             
             # Create a mock action object with the data we have
             class MockAction:
-                def __init__(self, action_id, action_type, moderator, target_id, target_type, display_id, target_permalink, timestamp):
+                def __init__(self, action_id, action_type, moderator, target_id, target_type, display_id, target_permalink, removal_reason, timestamp):
                     self.id = action_id
                     self.action = action_type
                     self.mod = moderator
                     # Use the timestamp directly
                     self.created_utc = timestamp
-                    self.details = "Cached action from database"
+                    self.details = removal_reason or "No removal reason"
                     self.display_id = display_id
                     self.target_permalink_cached = target_permalink
                     
@@ -463,7 +468,7 @@ def get_recent_actions_from_db(config: Dict[str, Any]) -> List:
                     elif target_type == 'user':
                         self.target_author = target_id
                     
-            mock_actions.append(MockAction(action_id, action_type, moderator, target_id, target_type, display_id, target_permalink, timestamp))
+            mock_actions.append(MockAction(action_id, action_type, moderator, target_id, target_type, display_id, target_permalink, removal_reason, timestamp))
         
         logger.info(f"Retrieved {len(mock_actions)} actions from database for force refresh")
         return mock_actions
