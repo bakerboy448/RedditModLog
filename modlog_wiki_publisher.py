@@ -260,6 +260,7 @@ def setup_database():
     """Initialize and migrate database"""
     try:
         migrate_database()
+        update_missing_subreddits()
         logger.info("Database setup completed successfully")
     except Exception as e:
         logger.error(f"Database setup failed: {e}")
@@ -443,6 +444,16 @@ def is_duplicate_action(action_id: str) -> bool:
         logger.error(f"Error checking duplicate action: {e}")
         return False
 
+def extract_subreddit_from_permalink(permalink):
+    """Extract subreddit name from Reddit permalink URL"""
+    if not permalink:
+        return None
+    
+    import re
+    # Match patterns like /r/subreddit/ or https://reddit.com/r/subreddit/
+    match = re.search(r'/r/([^/]+)/', permalink)
+    return match.group(1) if match else None
+
 def store_processed_action(action, subreddit_name=None):
     """Store processed action to prevent duplicates"""
     try:
@@ -465,6 +476,11 @@ def store_processed_action(action, subreddit_name=None):
         elif hasattr(action, 'mod_note') and action.mod_note:
             removal_reason = censor_email_addresses(str(action.mod_note).strip())
         
+        # Extract subreddit from URL if not provided
+        target_permalink = get_target_permalink(action)
+        if not subreddit_name and target_permalink:
+            subreddit_name = extract_subreddit_from_permalink(target_permalink)
+        
         # Add subreddit column if it doesn't exist
         cursor.execute("PRAGMA table_info(processed_actions)")
         columns = [row[1] for row in cursor.fetchall()]
@@ -482,7 +498,7 @@ def store_processed_action(action, subreddit_name=None):
             extract_target_id(action),
             get_target_type(action),
             generate_display_id(action),
-            get_target_permalink(action),
+            target_permalink,
             removal_reason,  # Store properly processed removal reason
             int(action.created_utc) if isinstance(action.created_utc, (int, float)) else int(action.created_utc.timestamp()),
             subreddit_name or 'unknown'
@@ -493,6 +509,38 @@ def store_processed_action(action, subreddit_name=None):
     except Exception as e:
         logger.error(f"Error storing processed action: {e}")
         raise
+
+def update_missing_subreddits():
+    """Update NULL subreddit entries by extracting from permalinks"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Get entries with NULL subreddit but valid permalink
+        cursor.execute("""
+            SELECT id, target_permalink FROM processed_actions 
+            WHERE subreddit IS NULL AND target_permalink IS NOT NULL
+        """)
+        
+        updates = []
+        for row_id, permalink in cursor.fetchall():
+            subreddit = extract_subreddit_from_permalink(permalink)
+            if subreddit:
+                updates.append((subreddit, row_id))
+        
+        # Update entries in batches
+        if updates:
+            cursor.executemany(
+                "UPDATE processed_actions SET subreddit = ? WHERE id = ?",
+                updates
+            )
+            logger.info(f"Updated {len(updates)} entries with extracted subreddit names")
+        
+        conn.commit()
+        conn.close()
+        
+    except Exception as e:
+        logger.error(f"Error updating missing subreddits: {e}")
 
 def cleanup_old_entries(retention_days: int):
     """Remove entries older than retention_days"""
@@ -541,9 +589,11 @@ def get_recent_actions_from_db(config: Dict[str, Any]) -> List:
         # STRICT subreddit filtering - only exact matches, no nulls
         subreddit_name = config.get('source_subreddit', '')
         
+        logger.debug(f"Query parameters - cutoff: {cutoff_timestamp}, wiki_actions: {wiki_actions}, subreddit: '{subreddit_name}', max_entries: {max_entries}")
+        
         # First check if we have multiple subreddits in the data
         cursor.execute("""
-            SELECT DISTINCT subreddit FROM processed_actions 
+            SELECT DISTINCT LOWER(subreddit) FROM processed_actions 
             WHERE created_at >= ? AND action_type IN ({}) AND subreddit IS NOT NULL
         """.format(placeholders), [cutoff_timestamp] + list(wiki_actions))
         
@@ -555,12 +605,18 @@ def get_recent_actions_from_db(config: Dict[str, Any]) -> List:
             conn.close()
             raise ValueError(f"Mixed subreddit data detected. Found: {distinct_subreddits}. This prevents safe wiki updates.")
         
+        # If no actions exist for this subreddit, warn and return empty
+        if not distinct_subreddits or subreddit_name.lower() not in distinct_subreddits:
+            logger.warning(f"No actions found for subreddit '{subreddit_name}' in database. Available subreddits: {distinct_subreddits}")
+            conn.close()
+            return []
+        
         query = f"""
             SELECT action_id, action_type, moderator, target_id, target_type, 
                    display_id, target_permalink, removal_reason, created_at 
             FROM processed_actions 
             WHERE created_at >= ? AND action_type IN ({placeholders})
-            AND subreddit = ?
+            AND LOWER(subreddit) = LOWER(?)
             ORDER BY created_at DESC 
             LIMIT ?
         """
@@ -621,24 +677,24 @@ def format_content_link(action) -> str:
     else:
         title = "Unknown content"
     
-    # Get permalink using the updated function that handles cached permalinks
-    permalink = get_target_permalink(action)
-    if permalink:
-        # Handle both full URLs and relative permalinks
-        if permalink.startswith('http'):
-            return f"[{title}]({permalink})"
-        else:
-            return f"[{title}](https://reddit.com{permalink})"
+    # Use the actual target_permalink from Reddit API, like main branch
+    if hasattr(action, 'target_permalink_cached') and action.target_permalink_cached:
+        permalink = action.target_permalink_cached
+    elif hasattr(action, 'target_permalink') and action.target_permalink:
+        permalink = f"https://www.reddit.com{action.target_permalink}"
     else:
         return title
+    
+    return f"[{title}]({permalink})"
 
 def format_modlog_entry(action, config: Dict[str, Any]) -> Dict[str, str]:
     """Format modlog entry with permalink-based ID for tracking"""
     
-    # Use permalink as the primary ID for markdown table
-    permalink = get_target_permalink(action)
-    if permalink:
-        display_id = permalink
+    # Use permalink as the primary ID for markdown table, like main branch
+    if hasattr(action, 'target_permalink_cached') and action.target_permalink_cached:
+        display_id = action.target_permalink_cached
+    elif hasattr(action, 'target_permalink') and action.target_permalink:
+        display_id = f"https://www.reddit.com{action.target_permalink}"
     else:
         # Fallback to generated display ID if no permalink available
         display_id = generate_display_id(action)
