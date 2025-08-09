@@ -1163,7 +1163,8 @@ def run_continuous_mode(reddit, config: Dict[str, Any], force: bool = False):
             if actions:
                 content = build_wiki_content(actions, config)
                 wiki_page = config.get('wiki_page', 'modlog')
-                update_wiki_page(reddit, config['source_subreddit'], wiki_page, content, force=force)
+                update_wiki_page(reddit, config['source_subreddit'], wiki_page, content, force=first_run_force)
+                first_run_force = False
             
             cleanup_old_entries(config.get('retention_days', CONFIG_LIMITS['retention_days']['default']))
             
