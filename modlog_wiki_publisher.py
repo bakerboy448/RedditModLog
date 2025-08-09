@@ -1185,7 +1185,7 @@ def run_continuous_mode(reddit, config: Dict[str, Any], force: bool = False):
                 break
             
             # Exponential backoff for errors
-            wait_time = min(60 * (2 ** (error_count - 1)), 300)  # Max 5 minutes
+            wait_time = min(BASE_BACKOFF_WAIT * (2 ** (error_count - 1)), MAX_BACKOFF_WAIT)  # Max 5 minutes
             logger.info(f"Waiting {wait_time} seconds before retry...")
             time.sleep(wait_time)
 
