@@ -1147,6 +1147,11 @@ def setup_logging(debug: bool = False):
         level=level,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
+    
+    # Set prawcore and urllib3 to TRACE level for Reddit API debugging when debug is enabled
+    if debug:
+        logging.getLogger("prawcore").setLevel(5)  # TRACE level (below DEBUG)
+        logging.getLogger("urllib3.connectionpool").setLevel(5)  # TRACE level
 
 def show_config_limits():
     """Display configuration limits and defaults"""
