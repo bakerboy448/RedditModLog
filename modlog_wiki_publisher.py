@@ -647,7 +647,7 @@ def get_recent_actions_from_db(config: Dict[str, Any], force_all_actions: bool =
         
         query = f"""
             SELECT action_id, action_type, moderator, target_id, target_type, 
-                   display_id, target_permalink, removal_reason, created_at 
+                   display_id, target_permalink, removal_reason, target_author, created_at 
             FROM processed_actions 
             WHERE created_at >= ? AND action_type IN ({placeholders})
             AND LOWER(subreddit) = LOWER(?)
@@ -664,12 +664,12 @@ def get_recent_actions_from_db(config: Dict[str, Any], force_all_actions: bool =
         # Convert database rows to mock action objects for compatibility with existing functions
         mock_actions = []
         for row in rows:
-            action_id, action_type, moderator, target_id, target_type, display_id, target_permalink, removal_reason, timestamp = row
+            action_id, action_type, moderator, target_id, target_type, display_id, target_permalink, removal_reason, target_author, timestamp = row
             logger.debug(f"Processing cached action: {action_type} by {moderator} at {timestamp}")
             
             # Create a mock action object with the data we have
             class MockAction:
-                def __init__(self, action_id, action_type, moderator, target_id, target_type, display_id, target_permalink, removal_reason, timestamp):
+                def __init__(self, action_id, action_type, moderator, target_id, target_type, display_id, target_permalink, removal_reason, target_author, timestamp):
                     self.id = action_id
                     self.action = action_type
                     self.mod = moderator
@@ -680,12 +680,11 @@ def get_recent_actions_from_db(config: Dict[str, Any], force_all_actions: bool =
                     self.target_permalink = target_permalink.replace('https://reddit.com', '') if target_permalink and target_permalink.startswith('https://reddit.com') else target_permalink
                     self.target_permalink_cached = target_permalink
                     
-                    # Don't set fake titles or target objects - let the main branch logic determine them
-                    # The format_content_link function will handle title generation based on actual target_author
+                    # Use actual target_author from database
                     self.target_title = None
-                    self.target_author = None  # Will be determined from permalink or other data if available
+                    self.target_author = target_author  # Use actual target_author from database
                     
-            mock_actions.append(MockAction(action_id, action_type, moderator, target_id, target_type, display_id, target_permalink, removal_reason, timestamp))
+            mock_actions.append(MockAction(action_id, action_type, moderator, target_id, target_type, display_id, target_permalink, removal_reason, target_author, timestamp))
         
         logger.info(f"Retrieved {len(mock_actions)} actions from database for force refresh")
         return mock_actions
