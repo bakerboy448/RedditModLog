@@ -33,7 +33,7 @@ CONFIG_LIMITS = {
 }
 
 # Database schema version
-CURRENT_DB_VERSION = 2
+CURRENT_DB_VERSION = 3
 
 def get_db_version():
     """Get current database schema version"""
@@ -190,6 +190,24 @@ def migrate_database():
             
             set_db_version(2)
         
+        # Migration from version 2 to 3: Add removal reason column
+        if current_version < 3:
+            logger.info("Applying migration: Add removal reason column (v2 -> v3)")
+            
+            # Check if column already exists
+            cursor.execute("PRAGMA table_info(processed_actions)")
+            existing_columns = [row[1] for row in cursor.fetchall()]
+            
+            if 'removal_reason' not in existing_columns:
+                try:
+                    cursor.execute("ALTER TABLE processed_actions ADD COLUMN removal_reason TEXT")
+                    logger.info("Added column: removal_reason")
+                except sqlite3.OperationalError as e:
+                    if "duplicate column name" not in str(e):
+                        raise
+            
+            set_db_version(3)
+        
         conn.commit()
         conn.close()
         logger.info(f"Database migration completed successfully to version {target_version}")
@@ -214,8 +232,8 @@ def get_action_datetime(action):
     else:
         return action.created_utc
 
-def get_moderator_name(action):
-    """Get moderator name with censoring for human moderators"""
+def get_moderator_name(action, anonymize=True):
+    """Get moderator name with optional anonymization for human moderators"""
     if not action.mod:
         return None
     
@@ -232,8 +250,11 @@ def get_moderator_name(action):
         else:
             return 'Reddit'
     
-    # For human moderators, show generic label
-    return 'HumanModerator'
+    # For human moderators, show generic label or actual name based on config
+    if anonymize:
+        return 'HumanModerator'
+    else:
+        return mod_name
 
 def extract_target_id(action):
     """Extract Reddit ID from action target"""
@@ -336,15 +357,16 @@ def store_processed_action(action):
         cursor.execute("""
             INSERT OR REPLACE INTO processed_actions 
             (action_id, action_type, moderator, target_id, target_type, 
-             display_id, target_permalink, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             display_id, target_permalink, removal_reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             action.id,
             action.action,
-            get_moderator_name(action),
+            get_moderator_name(action, False),  # Store actual name in database
             extract_target_id(action),
             get_target_type(action),
             generate_display_id(action),
             get_target_permalink(action),
+            action.details or None,  # Store removal reason from API
             int(action.created_utc) if isinstance(action.created_utc, (int, float)) else int(action.created_utc.timestamp())
         ))
         
@@ -483,7 +505,7 @@ def format_modlog_entry(action, config: Dict[str, Any]) -> Dict[str, str]:
         'time': get_action_datetime(action).strftime('%H:%M:%S UTC'),
         'action': action.action,
         'id': display_id,
-        'moderator': get_moderator_name(action) or 'Unknown',
+        'moderator': get_moderator_name(action, config.get('anonymize_moderators', True)) or 'Unknown',
         'content': format_content_link(action),
         'reason': action.details or 'No reason',
         'inquire': generate_modmail_link(config['source_subreddit'], action)
@@ -501,7 +523,8 @@ def generate_modmail_link(subreddit: str, action) -> str:
     body = f"I would like to inquire about the {action.action} action on {content_desc}"
     
     from urllib.parse import quote
-    return f"https://reddit.com/message/compose?to=/r/{subreddit}&subject={quote(subject)}&message={quote(body)}"
+    url = f"https://reddit.com/message/compose?to=/r/{subreddit}&subject={quote(subject)}&message={quote(body)}"
+    return f"[Inquire]({url})"
 
 def build_wiki_content(actions: List, config: Dict[str, Any]) -> str:
     """Build wiki page content from actions"""
@@ -591,7 +614,7 @@ def process_modlog_actions(reddit, config: Dict[str, Any]) -> List:
         ]))
         
         for action in subreddit.mod.log(limit=batch_size):
-            mod_name = get_moderator_name(action)
+            mod_name = get_moderator_name(action, False)  # Use actual name for ignore check
             if mod_name and mod_name in ignored_mods:
                 continue
             

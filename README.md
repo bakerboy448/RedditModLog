@@ -5,13 +5,15 @@ Automatically publishes Reddit moderation logs to a subreddit wiki page with mod
 ## Features
 
 * 📊 Publishes modlogs as organized markdown tables
-* 📧 Pre-populated modmail links for removal inquiries
+* 📧 Pre-populated modmail links for removal inquiries (formatted as clickable markdown links)
 * 🗄️ SQLite database for deduplication and retention
 * ⏰ Configurable update intervals
 * 🔒 Automatic cleanup of old entries
 * ⚡ Handles Reddit's 524KB wiki size limit
 * 🧩 Fully CLI-configurable (no need to edit `config.json`)
 * 📁 Per-subreddit log files for debugging
+* 🔒 Configurable moderator anonymization
+* 📝 Stores removal reasons from Reddit API in database
 
 ## Quick Start
 
@@ -67,7 +69,8 @@ Create `config.json`:
   "ignored_moderators": ["AutoModerator"],
   "update_interval": 300,
   "batch_size": 100,
-  "retention_days": 30
+  "retention_days": 30,
+  "anonymize_moderators": true
 }
 ```
 
@@ -109,7 +112,7 @@ Sample wiki table output:
 
 | Time | Action | ID | Moderator | Content | Reason | Inquire |
 |------|--------|----|-----------|---------|--------|---------|
-| 14:25:33 UTC | removepost | `P1a2b3c` | ModName | [Post Title](url) | spam | [Contact Mods](modmail_url) |
+| 14:25:33 UTC | removepost | `P1a2b3c` | HumanModerator | [Post Title](url) | spam | [Inquire](modmail_url) |
 ```
 
 ## Logging
@@ -145,18 +148,25 @@ Options:
 Uses `modlog.db` (SQLite) for deduplication and history:
 
 ```bash
-# View recent actions
+# View recent actions with removal reasons
+sqlite3 modlog.db "SELECT action_id, action_type, moderator, removal_reason, created_at FROM processed_actions ORDER BY created_at DESC LIMIT 10;"
+
+# View all columns including removal reasons
 sqlite3 modlog.db "SELECT * FROM processed_actions ORDER BY created_at DESC LIMIT 10;"
 
 # View actions by content ID
-sqlite3 modlog.db "SELECT display_id, action_type, moderator, datetime(created_at, 'unixepoch') FROM processed_actions WHERE display_id = 'P1a2b3c';"
+sqlite3 modlog.db "SELECT display_id, action_type, moderator, removal_reason, datetime(created_at, 'unixepoch') FROM processed_actions WHERE display_id = 'P1a2b3c';"
 
 # Track content lifecycle
-sqlite3 modlog.db "SELECT target_id, action_type, moderator, datetime(created_at, 'unixepoch') FROM processed_actions WHERE target_id = '1a2b3c' ORDER BY created_at;"
+sqlite3 modlog.db "SELECT target_id, action_type, moderator, removal_reason, datetime(created_at, 'unixepoch') FROM processed_actions WHERE target_id = '1a2b3c' ORDER BY created_at;"
 
 # Clean manually
 sqlite3 modlog.db "DELETE FROM processed_actions WHERE created_at < date('now', '-30 days');"
 ```
+
+### Database Schema
+
+The database now includes a `removal_reason` column that stores the reason/details from Reddit's API for each moderation action.
 
 ## Systemd Service (Optional)
 

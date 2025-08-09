@@ -42,7 +42,10 @@ python debug_auth.py
 
 ### Database Operations
 ```bash
-# View recent processed actions
+# View recent processed actions with removal reasons
+sqlite3 modlog.db "SELECT action_id, action_type, moderator, removal_reason, created_at FROM processed_actions ORDER BY created_at DESC LIMIT 10;"
+
+# View all columns including new removal_reason column
 sqlite3 modlog.db "SELECT * FROM processed_actions ORDER BY created_at DESC LIMIT 10;"
 
 # Manual cleanup of old entries
@@ -59,6 +62,17 @@ The application supports both JSON config files and CLI arguments (CLI overrides
 - `--batch-size`: Entries fetched per run (default: 100)
 - `--interval`: Seconds between updates in daemon mode (default: 300)
 - `--debug`: Enable verbose logging
+- `anonymize_moderators`: Whether to show "HumanModerator" for human mods (default: true)
+
+### Configuration Options
+
+**Moderator Display (`anonymize_moderators`)**:
+- `true` (default): Shows "AutoMod", "Reddit", or "HumanModerator"
+- `false`: Shows actual moderator usernames
+
+**Database Storage**:
+- All moderator names are stored as actual usernames in the database regardless of display setting
+- Removal reasons from the Reddit API are now stored in the `removal_reason` column
 
 ## Authentication Requirements
 
@@ -85,3 +99,4 @@ Use `--test` flag to verify configuration and Reddit API connectivity without ma
 - 401 errors: Check app type is "script" and verify client_id/client_secret
 - Wiki permission denied: Ensure bot has moderator or wiki contributor access
 - Rate limiting: Increase `--interval` and/or reduce `--batch-size`
+- always update claide.md and readme.md
