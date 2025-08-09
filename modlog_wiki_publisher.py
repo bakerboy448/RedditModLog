@@ -341,16 +341,25 @@ def get_moderator_name(action, anonymize=True):
 
 def extract_target_id(action):
     """Extract Reddit ID from action target - NEVER return user ID"""
+    # Priority order: get actual post/comment ID first
     if hasattr(action, 'target_submission') and action.target_submission:
         if hasattr(action.target_submission, 'id'):
             return action.target_submission.id
         else:
-            return str(action.target_submission)
+            # Extract ID from submission object string representation
+            target_str = str(action.target_submission)
+            if target_str.startswith('t3_'):
+                return target_str[3:]  # Remove t3_ prefix
+            return target_str
     elif hasattr(action, 'target_comment') and action.target_comment:
         if hasattr(action.target_comment, 'id'):
             return action.target_comment.id
         else:
-            return str(action.target_comment)
+            # Extract ID from comment object string representation
+            target_str = str(action.target_comment)
+            if target_str.startswith('t1_'):
+                return target_str[3:]  # Remove t1_ prefix
+            return target_str
     else:
         # For user-related actions, use action ID instead of user ID
         return action.id
@@ -394,12 +403,19 @@ def get_target_permalink(action):
         return action.target_permalink_cached
     
     try:
+        # Priority: get actual post/comment permalinks
         if hasattr(action, 'target_submission') and action.target_submission:
             if hasattr(action.target_submission, 'permalink'):
                 return f"https://reddit.com{action.target_submission.permalink}"
+            elif hasattr(action.target_submission, 'id'):
+                # Construct permalink from submission ID
+                return f"https://reddit.com/comments/{action.target_submission.id}/"
         elif hasattr(action, 'target_comment') and action.target_comment:
             if hasattr(action.target_comment, 'permalink'):
                 return f"https://reddit.com{action.target_comment.permalink}"
+            elif hasattr(action.target_comment, 'id'):
+                # For comments, we need the submission ID too - best effort
+                return f"https://reddit.com/comments/{action.target_comment.id}/"
         elif hasattr(action, 'target_author') and action.target_author:
             if hasattr(action.target_author, 'name'):
                 return f"https://reddit.com/u/{action.target_author.name}"
@@ -433,10 +449,21 @@ def store_processed_action(action, subreddit_name=None):
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
-        # Process removal reason properly like in main branch
+        # Process removal reason properly - handle both text and numeric reasons
         removal_reason = None
-        if action.details:
-            removal_reason = censor_email_addresses(action.details.strip())
+        if hasattr(action, 'details') and action.details:
+            details_str = str(action.details).strip()
+            # If it's just a number, try to get the actual removal reason text
+            if details_str.isdigit() and hasattr(action, 'mod_note') and action.mod_note:
+                removal_reason = censor_email_addresses(str(action.mod_note).strip())
+            elif details_str.isdigit():
+                # Keep the number if no mod_note available, but mark it clearly
+                removal_reason = f"Removal reason #{details_str}"
+            else:
+                removal_reason = censor_email_addresses(details_str)
+        # Also check mod_note as potential source for removal reason
+        elif hasattr(action, 'mod_note') and action.mod_note:
+            removal_reason = censor_email_addresses(str(action.mod_note).strip())
         
         # Add subreddit column if it doesn't exist
         cursor.execute("PRAGMA table_info(processed_actions)")
@@ -511,14 +538,29 @@ def get_recent_actions_from_db(config: Dict[str, Any]) -> List:
         max_entries = config.get('max_wiki_entries_per_page', CONFIG_LIMITS['max_wiki_entries_per_page']['default'])
         
         placeholders = ','.join(['?'] * len(wiki_actions))
-        # Filter by subreddit to prevent mixing
+        # STRICT subreddit filtering - only exact matches, no nulls
         subreddit_name = config.get('source_subreddit', '')
+        
+        # First check if we have multiple subreddits in the data
+        cursor.execute("""
+            SELECT DISTINCT subreddit FROM processed_actions 
+            WHERE created_at >= ? AND action_type IN ({}) AND subreddit IS NOT NULL
+        """.format(placeholders), [cutoff_timestamp] + list(wiki_actions))
+        
+        distinct_subreddits = [row[0] for row in cursor.fetchall() if row[0]]
+        
+        if len(distinct_subreddits) > 1:
+            logger.error(f"CRITICAL: Multiple subreddits detected in database: {distinct_subreddits}")
+            logger.error("Cannot safely update wiki - mixed subreddit data would corrupt the wiki")
+            conn.close()
+            raise ValueError(f"Mixed subreddit data detected. Found: {distinct_subreddits}. This prevents safe wiki updates.")
+        
         query = f"""
             SELECT action_id, action_type, moderator, target_id, target_type, 
                    display_id, target_permalink, removal_reason, created_at 
             FROM processed_actions 
             WHERE created_at >= ? AND action_type IN ({placeholders})
-            AND (subreddit = ? OR subreddit IS NULL)
+            AND subreddit = ?
             ORDER BY created_at DESC 
             LIMIT ?
         """
@@ -591,9 +633,26 @@ def format_content_link(action) -> str:
         return title
 
 def format_modlog_entry(action, config: Dict[str, Any]) -> Dict[str, str]:
-    """Format modlog entry with unique ID for tracking"""
+    """Format modlog entry with permalink-based ID for tracking"""
     
-    display_id = generate_display_id(action)
+    # Use permalink as the primary ID for markdown table
+    permalink = get_target_permalink(action)
+    if permalink:
+        display_id = permalink
+    else:
+        # Fallback to generated display ID if no permalink available
+        display_id = generate_display_id(action)
+    
+    # Handle removal reasons properly - check for numeric reasons
+    reason_text = "No reason"
+    if hasattr(action, 'details') and action.details:
+        details_str = str(action.details).strip()
+        if details_str.isdigit():
+            reason_text = f"Removal reason #{details_str}"
+        else:
+            reason_text = details_str
+    elif hasattr(action, 'mod_note') and action.mod_note:
+        reason_text = str(action.mod_note).strip()
     
     return {
         'time': get_action_datetime(action).strftime('%H:%M:%S UTC'),
@@ -601,7 +660,7 @@ def format_modlog_entry(action, config: Dict[str, Any]) -> Dict[str, str]:
         'id': display_id,
         'moderator': get_moderator_name(action, config.get('anonymize_moderators', True)) or 'Unknown',
         'content': format_content_link(action),
-        'reason': action.details or 'No reason',
+        'reason': reason_text,
         'inquire': generate_modmail_link(config['source_subreddit'], action)
     }
 
@@ -624,6 +683,20 @@ def build_wiki_content(actions: List, config: Dict[str, Any]) -> str:
     """Build wiki page content from actions"""
     if not actions:
         return "No recent moderation actions found."
+    
+    # CRITICAL: Validate all actions belong to the same subreddit before building content
+    target_subreddit = config.get('source_subreddit', '')
+    mixed_subreddits = set()
+    
+    for action in actions:
+        # Check if action has subreddit info and if it matches
+        if hasattr(action, 'subreddit') and action.subreddit:
+            if action.subreddit != target_subreddit:
+                mixed_subreddits.add(action.subreddit)
+    
+    if mixed_subreddits:
+        logger.error(f"CRITICAL: Mixed subreddit data in actions for {target_subreddit}: {mixed_subreddits}")
+        raise ValueError(f"Cannot build wiki content - mixed subreddit data detected: {mixed_subreddits}")
     
     # Enforce wiki entry limits
     max_entries = config.get('max_wiki_entries_per_page', CONFIG_LIMITS['max_wiki_entries_per_page']['default'])
@@ -651,6 +724,11 @@ def build_wiki_content(actions: List, config: Dict[str, Any]) -> str:
             content_parts.append(f"| {entry['time']} | {entry['action']} | `{entry['id']}` | {entry['moderator']} | {entry['content']} | {entry['reason']} | {entry['inquire']} |")
         
         content_parts.append("")  # Empty line between dates
+    
+    # Add bot attribution footer after all content
+    content_parts.append("---")
+    content_parts.append("")
+    content_parts.append("*This modlog is automatically maintained by [RedditModLog](https://github.com/bakerboy448/RedditModLog) bot.*")
     
     return "\n".join(content_parts)
 
