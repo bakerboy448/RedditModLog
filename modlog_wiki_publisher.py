@@ -384,11 +384,11 @@ def generate_display_id(action):
     prefixes = {
         'post': 'P',
         'comment': 'C', 
-        'user': 'A',  # Use 'A' for action ID when dealing with user actions
+        'user': 'U',  # Use 'A' for action ID when dealing with user actions
         'action': 'A'
     }
     
-    prefix = prefixes.get(target_type, 'A')
+    prefix = prefixes.get(target_type, 'ZZU')
     
     # Shorten long IDs for display
     if len(str(target_id)) > 8 and target_type in ['post', 'comment']:
@@ -474,11 +474,11 @@ def store_processed_action(action, subreddit_name=None):
         if hasattr(action, 'mod_note') and action.mod_note:
             removal_reason = censor_email_addresses(str(action.mod_note).strip())
         # Second priority: details (accept all non-empty details text)
-        elif hasattr(action, 'details') and action.details:
-            details_str = str(action.details).strip()
+        elif hasattr(action, 'description') and action.description:
+            description_str = str(action.description).strip()
             # Only show generic message for purely numeric details that are likely IDs
-            if details_str.isdigit() and len(details_str) > 6:
-                removal_reason = "Removal reason applied"
+            if description_str.isdigit() and len(description_str) > 6:
+                removal_reason = f"ModLog description appears as a numeric id? [{description_str}]. A Removal reason was applied"
             else:
                 removal_reason = censor_email_addresses(details_str)
         
