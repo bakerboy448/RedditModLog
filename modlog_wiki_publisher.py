@@ -517,7 +517,7 @@ def store_processed_action(action, subreddit_name=None):
             get_target_type(action),
             generate_display_id(action),
             target_permalink,
-            removal_reason,  # Store properly processed removal reason
+            removal_reason.replace("|"," "),  # Store properly processed removal reason
             target_author,
             int(action.created_utc) if isinstance(action.created_utc, (int, float)) else int(action.created_utc.timestamp()),
             subreddit_name or 'unknown'
@@ -784,7 +784,7 @@ def format_modlog_entry(action, config: Dict[str, Any]) -> Dict[str, str]:
         'id': content_id,
         'moderator': get_moderator_name(action, config.get('anonymize_moderators', True)) or 'Unknown',
         'content': format_content_link(action),
-        'reason': reason_text.replace("|"," ")
+        'reason': reason_text.replace("|"," "),
         'inquire': generate_modmail_link(config['source_subreddit'], action)
     }
 
