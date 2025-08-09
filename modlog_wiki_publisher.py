@@ -467,21 +467,20 @@ def store_processed_action(action, subreddit_name=None):
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
-        # Process removal reason properly - handle both text and numeric reasons
+        # Process removal reason properly - ALWAYS prefer mod_note over numeric details
         removal_reason = None
-        if hasattr(action, 'details') and action.details:
-            details_str = str(action.details).strip()
-            # If it's just a number, try to get the actual removal reason text
-            if details_str.isdigit() and hasattr(action, 'mod_note') and action.mod_note:
-                removal_reason = censor_email_addresses(str(action.mod_note).strip())
-            elif details_str.isdigit():
-                # Keep the number if no mod_note available, but mark it clearly
-                removal_reason = f"Removal reason #{details_str}"
-            else:
-                removal_reason = censor_email_addresses(details_str)
-        # Also check mod_note as potential source for removal reason
-        elif hasattr(action, 'mod_note') and action.mod_note:
+        
+        # First priority: mod_note (actual removal reason text)
+        if hasattr(action, 'mod_note') and action.mod_note:
             removal_reason = censor_email_addresses(str(action.mod_note).strip())
+        # Second priority: details (but only if it's not just a number)
+        elif hasattr(action, 'details') and action.details:
+            details_str = str(action.details).strip()
+            if not details_str.isdigit():
+                removal_reason = censor_email_addresses(details_str)
+            # If it's just a number and we don't have mod_note, show generic message
+            else:
+                removal_reason = "Removal reason applied"
         
         # Extract subreddit from URL if not provided
         target_permalink = get_target_permalink(action)
@@ -776,20 +775,34 @@ def format_modlog_entry(action, config: Dict[str, Any]) -> Dict[str, str]:
             content_id = extract_content_id_from_permalink(permalink)
             display_id = content_id if content_id else None
     
-    # Priority 3: If no content ID available, show empty (so removals can't be linked)
+    # Priority 3: Try to use stored target_id if it looks like content
+    if not display_id and hasattr(action, 'target_id') and action.target_id:
+        target_id = str(action.target_id)
+        # If target_id looks like a Reddit ID, use it
+        if len(target_id) >= 6 and not target_id.startswith('ModAction'):
+            if action.action in ['removelink', 'spamlink']:
+                display_id = f"t3_{target_id}" if not target_id.startswith('t3_') else target_id
+            elif action.action in ['removecomment', 'spamcomment']:  
+                display_id = f"t1_{target_id}" if not target_id.startswith('t1_') else target_id
+    
+    # Priority 4: If no content ID available, show empty (so removals can't be linked)
     if not display_id:
         display_id = "-"  # No linkable content ID available
     
-    # Handle removal reasons properly - check for numeric reasons
+    # Handle removal reasons properly - ALWAYS prefer mod_note over numeric details
     reason_text = "No reason"
-    if hasattr(action, 'details') and action.details:
-        details_str = str(action.details).strip()
-        if details_str.isdigit():
-            reason_text = f"Removal reason #{details_str}"
-        else:
-            reason_text = details_str
-    elif hasattr(action, 'mod_note') and action.mod_note:
+    
+    # First priority: mod_note (actual removal reason text)
+    if hasattr(action, 'mod_note') and action.mod_note:
         reason_text = str(action.mod_note).strip()
+    # Second priority: details (but only if it's not just a number)
+    elif hasattr(action, 'details') and action.details:
+        details_str = str(action.details).strip()
+        if not details_str.isdigit():
+            reason_text = details_str
+        # If it's just a number, show generic message instead of "Removal reason #7"
+        else:
+            reason_text = "Removal reason applied"
     
     return {
         'time': get_action_datetime(action).strftime('%H:%M:%S UTC'),
