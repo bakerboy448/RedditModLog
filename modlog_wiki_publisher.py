@@ -1263,13 +1263,24 @@ def main():
                 logger.warning("No removal actions found in database for wiki refresh")
             return
         
-        # Process modlog actions
+        # Handle force-wiki: rebuild from database without hitting modlog API  
+        if args.force_wiki and not args.force_modlog:
+            logger.info("Force wiki requested - rebuilding from database without API calls")
+            actions = get_recent_actions_from_db(config, force_all_actions=False)
+            if actions:
+                logger.info(f"Found {len(actions)} actions in database for wiki rebuild")
+                content = build_wiki_content(actions, config)
+                wiki_page = config.get('wiki_page', 'modlog')
+                update_wiki_page(reddit, config['source_subreddit'], wiki_page, content, force=True)
+            else:
+                logger.warning("No actions found in database for wiki rebuild")
+            return
+        
+        # Process modlog actions (normal operation)
         actions = process_modlog_actions(reddit, config)
         
-        if actions or args.force_wiki:
+        if actions:
             logger.info(f"Found {len(actions)} new actions to process")
-            if args.force_wiki:
-                logger.info("Force Wiki Selected")
             content = build_wiki_content(actions, config)
             wiki_page = config.get('wiki_page', 'modlog')
             update_wiki_page(reddit, config['source_subreddit'], wiki_page, content, force=args.force_wiki)

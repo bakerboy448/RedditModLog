@@ -4,18 +4,19 @@ Automatically publishes Reddit moderation logs to a subreddit wiki page with mod
 
 ## Features
 
-* 📊 Publishes modlogs as organized markdown tables with content tracking IDs
+* 📊 Publishes modlogs as organized markdown tables with unique content tracking IDs
 * 📧 Pre-populated modmail links for removal inquiries (formatted as clickable markdown links)
-* 🗄️ SQLite database for deduplication and retention with multi-subreddit support
-* ⏰ Configurable update intervals
-* 🔒 Automatic cleanup of old entries
-* ⚡ Handles Reddit's 524KB wiki size limit
+* 🗄️ SQLite database for deduplication and retention with **multi-subreddit support**
+* ⏰ Configurable update intervals with continuous daemon mode
+* 🔒 Automatic cleanup of old entries with configurable retention
+* ⚡ Handles Reddit's 524KB wiki size limit automatically  
 * 🧩 Fully CLI-configurable (no need to edit `config.json`)
-* 📁 Per-subreddit log files for debugging
+* 📁 Per-subreddit log files for debugging and monitoring
 * 🔒 Configurable moderator anonymization (AutoModerator/HumanModerator)
-* 📝 Stores removal reasons from Reddit API with intelligent text/number handling
-* 🔗 Links directly to actual content (posts/comments), never user profiles
-* 🆔 Short content IDs extracted from permalinks for easy action tracking
+* 📝 **Full removal reason transparency** - shows actual text, template numbers, all available data
+* 🔗 Links directly to actual content (posts/comments), never user profiles for privacy
+* 🆔 **Unique content IDs** - comments show comment IDs, posts show post IDs for precise tracking
+* ✅ **Multi-subreddit database support** - single database handles multiple subreddits safely
 
 ## Quick Start
 

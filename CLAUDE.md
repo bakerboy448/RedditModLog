@@ -109,27 +109,38 @@ Use `--test` flag to verify configuration and Reddit API connectivity without ma
 
 User profile links are a privacy concern and not useful for modlog purposes.
 
-## Recent Improvements (v2.0)
+## Recent Improvements (v2.1)
 
-**Content Linking Fixes**:
-- ✅ Content links now point to actual Reddit posts/comments, never user profiles
-- ✅ Proper content titles extracted from Reddit API data
-- ✅ Short content IDs (e.g., "1mkz4jm") for easy action tracking
-
-**Removal Reason Handling**:
-- ✅ Prioritizes actual removal reason text over numbers
-- ✅ For `addremovalreason` actions, shows mod_note text instead of numeric details
-- ✅ Intelligent handling of text vs numeric removal reasons
-
-**Moderator Display**:
-- ✅ AutoModerator displays as "AutoModerator" (not anonymized)
-- ✅ Configurable anonymization for human moderators
-- ✅ Proper handling of Reddit admin actions
-
-**Multi-Subreddit Support**:
-- ✅ Single database supports multiple subreddits with proper data separation
+**Multi-Subreddit Database Support**:
+- ✅ Fixed critical error that prevented multi-subreddit databases from working
+- ✅ Single database now safely handles multiple subreddits with proper data separation
 - ✅ Per-subreddit wiki updates without cross-contamination
 - ✅ Subreddit-specific logging and error handling
+
+**Removal Reason Transparency**:
+- ✅ Fixed "Removal reason applied" showing instead of actual text
+- ✅ Full transparency - shows ALL available removal reason data including template numbers
+- ✅ Consistent handling between storage and display logic using correct Reddit API fields
+- ✅ Displays actual removal reasons like "Invites - No asking", "This comment has been filtered due to crowd control"
+
+**Unique Content ID Tracking**:
+- ✅ Fixed duplicate IDs in markdown tables where all comments showed same post ID
+- ✅ Comments now show unique comment IDs (e.g., "n7ravg2") for precise tracking
+- ✅ Posts show post IDs for clear content identification
+- ✅ Each modlog entry has a unique identifier for easy reference
+
+**Content Linking and Display**:
+- ✅ Content links point to actual Reddit posts/comments, never user profiles for privacy
+- ✅ Fixed target authors showing as [deleted] - now displays actual usernames  
+- ✅ Proper content titles extracted from Reddit API data
+- ✅ AutoModerator displays as "AutoModerator" (not anonymized)
+- ✅ Configurable anonymization for human moderators
+
+**Data Integrity**:
+- ✅ Pipe character escaping for markdown table compatibility
+- ✅ Robust error handling for mixed subreddit scenarios  
+- ✅ Database schema at version 5 with all required columns
+- ✅ Consistent Reddit API field usage (action.details vs action.description)
 
 ## Common Issues
 
