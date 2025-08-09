@@ -34,7 +34,7 @@ CONFIG_LIMITS = {
 }
 
 # Database schema version
-CURRENT_DB_VERSION = 4
+CURRENT_DB_VERSION = 5
 
 def get_db_version():
     """Get current database schema version"""
@@ -228,6 +228,26 @@ def migrate_database():
             
             set_db_version(4)
         
+        # Migration from version 4 to 5: Add subreddit column
+        if current_version < 5:
+            logger.info("Applying migration: Add subreddit column (v4 -> v5)")
+            
+            # Check if column already exists
+            cursor.execute("PRAGMA table_info(processed_actions)")
+            existing_columns = [row[1] for row in cursor.fetchall()]
+            
+            if 'subreddit' not in existing_columns:
+                try:
+                    cursor.execute("ALTER TABLE processed_actions ADD COLUMN subreddit TEXT")
+                    logger.info("Added column: subreddit")
+                except sqlite3.OperationalError as e:
+                    if "duplicate column name" not in str(e):
+                        raise
+            
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_subreddit ON processed_actions(subreddit)")
+            
+            set_db_version(5)
+        
         conn.commit()
         conn.close()
         logger.info(f"Database migration completed successfully to version {target_version}")
@@ -280,6 +300,14 @@ def update_cached_wiki_hash(subreddit: str, wiki_page: str, content_hash: str):
     except Exception as e:
         logger.warning(f"Failed to update cached wiki hash: {e}")
 
+def censor_email_addresses(text):
+    """Censor email addresses in removal reasons"""
+    if not text:
+        return text
+    import re
+    # Replace email addresses with [EMAIL]
+    return re.sub(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', '[EMAIL]', text)
+
 def get_action_datetime(action):
     """Convert action.created_utc to datetime object regardless of input type"""
     if isinstance(action.created_utc, (int, float)):
@@ -312,7 +340,7 @@ def get_moderator_name(action, anonymize=True):
         return mod_name
 
 def extract_target_id(action):
-    """Extract Reddit ID from action target"""
+    """Extract Reddit ID from action target - NEVER return user ID"""
     if hasattr(action, 'target_submission') and action.target_submission:
         if hasattr(action.target_submission, 'id'):
             return action.target_submission.id
@@ -323,13 +351,9 @@ def extract_target_id(action):
             return action.target_comment.id
         else:
             return str(action.target_comment)
-    elif hasattr(action, 'target_author') and action.target_author:
-        if hasattr(action.target_author, 'name'):
-            return action.target_author.name
-        else:
-            return str(action.target_author)
     else:
-        return action.id  # Fallback to action ID
+        # For user-related actions, use action ID instead of user ID
+        return action.id
 
 def get_target_type(action):
     """Determine target type for ID prefix"""
@@ -343,18 +367,18 @@ def get_target_type(action):
         return 'action'
 
 def generate_display_id(action):
-    """Generate human-readable display ID"""
+    """Generate human-readable display ID - NEVER use user ID"""
     target_id = extract_target_id(action)
     target_type = get_target_type(action)
     
     prefixes = {
         'post': 'P',
         'comment': 'C', 
-        'user': 'U',
+        'user': 'A',  # Use 'A' for action ID when dealing with user actions
         'action': 'A'
     }
     
-    prefix = prefixes.get(target_type, 'X')
+    prefix = prefixes.get(target_type, 'A')
     
     # Shorten long IDs for display
     if len(str(target_id)) > 8 and target_type in ['post', 'comment']:
@@ -403,7 +427,7 @@ def is_duplicate_action(action_id: str) -> bool:
         logger.error(f"Error checking duplicate action: {e}")
         return False
 
-def store_processed_action(action):
+def store_processed_action(action, subreddit_name=None):
     """Store processed action to prevent duplicates"""
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -412,12 +436,18 @@ def store_processed_action(action):
         # Process removal reason properly like in main branch
         removal_reason = None
         if action.details:
-            removal_reason = action.details.strip()
+            removal_reason = censor_email_addresses(action.details.strip())
+        
+        # Add subreddit column if it doesn't exist
+        cursor.execute("PRAGMA table_info(processed_actions)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if 'subreddit' not in columns:
+            cursor.execute("ALTER TABLE processed_actions ADD COLUMN subreddit TEXT")
         
         cursor.execute("""
             INSERT OR REPLACE INTO processed_actions 
             (action_id, action_type, moderator, target_id, target_type, 
-             display_id, target_permalink, removal_reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             display_id, target_permalink, removal_reason, created_at, subreddit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             action.id,
             action.action,
@@ -427,7 +457,8 @@ def store_processed_action(action):
             generate_display_id(action),
             get_target_permalink(action),
             removal_reason,  # Store properly processed removal reason
-            int(action.created_utc) if isinstance(action.created_utc, (int, float)) else int(action.created_utc.timestamp())
+            int(action.created_utc) if isinstance(action.created_utc, (int, float)) else int(action.created_utc.timestamp()),
+            subreddit_name or 'unknown'
         ))
         
         conn.commit()
@@ -480,16 +511,19 @@ def get_recent_actions_from_db(config: Dict[str, Any]) -> List:
         max_entries = config.get('max_wiki_entries_per_page', CONFIG_LIMITS['max_wiki_entries_per_page']['default'])
         
         placeholders = ','.join(['?'] * len(wiki_actions))
+        # Filter by subreddit to prevent mixing
+        subreddit_name = config.get('source_subreddit', '')
         query = f"""
             SELECT action_id, action_type, moderator, target_id, target_type, 
                    display_id, target_permalink, removal_reason, created_at 
             FROM processed_actions 
             WHERE created_at >= ? AND action_type IN ({placeholders})
+            AND (subreddit = ? OR subreddit IS NULL)
             ORDER BY created_at DESC 
             LIMIT ?
         """
         
-        cursor.execute(query, [cutoff_timestamp] + list(wiki_actions) + [max_entries])
+        cursor.execute(query, [cutoff_timestamp] + list(wiki_actions) + [subreddit_name, max_entries])
         rows = cursor.fetchall()
         conn.close()
         
@@ -704,7 +738,7 @@ def process_modlog_actions(reddit, config: Dict[str, Any]) -> List:
                 new_actions.append(action)
             
             # Store all actions to prevent duplicates but only add wiki-relevant ones to the list
-            store_processed_action(action)
+            store_processed_action(action, config['source_subreddit'])
             processed_count += 1
             
             if processed_count >= batch_size:
