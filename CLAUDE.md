@@ -136,4 +136,14 @@ User profile links are a privacy concern and not useful for modlog purposes.
 - 401 errors: Check app type is "script" and verify client_id/client_secret
 - Wiki permission denied: Ensure bot has moderator or wiki contributor access
 - Rate limiting: Increase `--interval` and/or reduce `--batch-size`
-- always update claide.md and readme.md
+- always update CLAUDE.md and README.md
+- if branch is not main then you may commit and push if a PR is draft or not open
+- always update commands and flags
+- if an .venv has been told to use, remember it
+- always remove CHANGELOG from CLAUDE.md
+- always create and update a changelog. this should be scripted and based on a git tag?
+- always use conventional commits
+- use multiple commits if needed. you may patch if easier, do this automatically
+- rewrite this file to be more organized
+- always escape markdown table values like removal reasons for pipes; just do this in the database, no pipes
+- confirm the cache file of wiki page and ensure warn if the the same interfactively ask to force refresh
