@@ -617,25 +617,33 @@ def get_recent_actions_from_db(config: Dict[str, Any], force_all_actions: bool =
         
         logger.debug(f"Query parameters - cutoff: {cutoff_timestamp}, wiki_actions: {wiki_actions}, subreddit: '{subreddit_name}', max_entries: {max_entries}")
         
-        # First check if we have multiple subreddits in the data
+        # Check if actions exist for the requested subreddit
         cursor.execute("""
-            SELECT DISTINCT LOWER(subreddit) FROM processed_actions 
-            WHERE created_at >= ? AND action_type IN ({}) AND subreddit IS NOT NULL
-        """.format(placeholders), [cutoff_timestamp] + list(wiki_actions))
+            SELECT COUNT(*) FROM processed_actions 
+            WHERE created_at >= ? AND action_type IN ({}) 
+            AND LOWER(subreddit) = LOWER(?)
+        """.format(placeholders), [cutoff_timestamp] + list(wiki_actions) + [subreddit_name])
         
-        distinct_subreddits = [row[0] for row in cursor.fetchall() if row[0]]
+        action_count = cursor.fetchone()[0]
         
-        if len(distinct_subreddits) > 1:
-            logger.error(f"CRITICAL: Multiple subreddits detected in database: {distinct_subreddits}")
-            logger.error("Cannot safely update wiki - mixed subreddit data would corrupt the wiki")
-            conn.close()
-            raise ValueError(f"Mixed subreddit data detected. Found: {distinct_subreddits}. This prevents safe wiki updates.")
-        
-        # If no actions exist for this subreddit, warn and return empty
-        if not distinct_subreddits or subreddit_name.lower() not in distinct_subreddits:
-            logger.warning(f"No actions found for subreddit '{subreddit_name}' in database. Available subreddits: {distinct_subreddits}")
+        # If no actions exist for this subreddit, return empty list
+        if action_count == 0:
+            logger.info(f"No actions found for subreddit '{subreddit_name}' in the specified time range")
             conn.close()
             return []
+        
+        logger.debug(f"Found {action_count} actions for subreddit '{subreddit_name}'")
+        
+        # Get list of all subreddits for informational purposes
+        cursor.execute("""
+            SELECT DISTINCT LOWER(subreddit) FROM processed_actions 
+            WHERE created_at >= ? AND subreddit IS NOT NULL
+        """, [cutoff_timestamp])
+        
+        all_subreddits = [row[0] for row in cursor.fetchall() if row[0]]
+        if len(all_subreddits) > 1:
+            logger.info(f"Multi-subreddit database contains data for: {sorted(all_subreddits)}")
+        logger.info(f"Retrieving actions for subreddit: '{subreddit_name}'")
         
         query = f"""
             SELECT action_id, action_type, moderator, target_id, target_type, 
