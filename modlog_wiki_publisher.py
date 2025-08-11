@@ -862,8 +862,12 @@ def generate_modmail_link(subreddit: str, action) -> str:
 
 def build_wiki_content(actions: List, config: Dict[str, Any]) -> str:
     """Build wiki page content from actions"""
+    # Add timestamp header at the top
+    current_time = datetime.now(timezone.utc)
+    timestamp_header = f"**Last Updated:** {current_time.strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n---\n\n"
+    
     if not actions:
-        return "No recent moderation actions found."
+        return timestamp_header + "No recent moderation actions found."
     
     # CRITICAL: Validate all actions belong to the same subreddit before building content
     target_subreddit = config.get('source_subreddit', '')
@@ -894,7 +898,7 @@ def build_wiki_content(actions: List, config: Dict[str, Any]) -> str:
         actions_by_date[date_str].append(action)
     
     # Build content - include ID column for tracking actions across the table
-    content_parts = []
+    content_parts = [timestamp_header]
     for date_str in sorted(actions_by_date.keys(), reverse=True):
         content_parts.append(f"## {date_str}")
         content_parts.append("| Time | Action | ID | Moderator | Content | Reason | Inquire |")
