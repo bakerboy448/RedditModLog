@@ -1300,13 +1300,20 @@ def main():
             return
         
         # Process modlog actions (normal operation)
-        actions = process_modlog_actions(reddit, config)
+        new_actions = process_modlog_actions(reddit, config)
         
-        if actions:
-            logger.info(f"Found {len(actions)} new actions to process")
-            content = build_wiki_content(actions, config)
+        if new_actions:
+            logger.info(f"Processed {len(new_actions)} new modlog actions")
+        
+        # Always rebuild wiki from ALL relevant actions in database (within retention period)
+        all_actions = get_recent_actions_from_db(config, force_all_actions=False, show_only_removals=True)
+        if all_actions:
+            logger.info(f"Found {len(all_actions)} total actions in database for wiki update")
+            content = build_wiki_content(all_actions, config)
             wiki_page = config.get('wiki_page', 'modlog')
             update_wiki_page(reddit, config['source_subreddit'], wiki_page, content, force=args.force_wiki)
+        else:
+            logger.warning("No actions found in database for wiki update")
         
         cleanup_old_entries(get_config_with_default(config, 'retention_days'))
         
