@@ -4,14 +4,19 @@ Automatically publishes Reddit moderation logs to a subreddit wiki page with mod
 
 ## Features
 
-* 📊 Publishes modlogs as organized markdown tables
-* 📧 Pre-populated modmail links for removal inquiries
-* 🗄️ SQLite database for deduplication and retention
-* ⏰ Configurable update intervals
-* 🔒 Automatic cleanup of old entries
-* ⚡ Handles Reddit's 524KB wiki size limit
+* 📊 Publishes modlogs as organized markdown tables with unique content tracking IDs
+* 📧 Pre-populated modmail links for removal inquiries (formatted as clickable markdown links)
+* 🗄️ SQLite database for deduplication and retention with **multi-subreddit support**
+* ⏰ Configurable update intervals with continuous daemon mode
+* 🔒 Automatic cleanup of old entries with configurable retention
+* ⚡ Handles Reddit's 524KB wiki size limit automatically  
 * 🧩 Fully CLI-configurable (no need to edit `config.json`)
-* 📁 Per-subreddit log files for debugging
+* 📁 Per-subreddit log files for debugging and monitoring
+* 🔒 Configurable moderator anonymization (AutoModerator/HumanModerator)
+* 📝 **Complete removal reason transparency** - AutoModerator rule text, addremovalreason descriptions, all actual removal text (never generic messages or template numbers)
+* 🔗 Links directly to actual content (posts/comments), never user profiles for privacy
+* 🆔 **Unique content IDs** - comments show comment IDs, posts show post IDs for precise tracking
+* ✅ **Multi-subreddit database support** - single database handles multiple subreddits safely
 
 ## Quick Start
 
@@ -67,33 +72,52 @@ Create `config.json`:
   "ignored_moderators": ["AutoModerator"],
   "update_interval": 300,
   "batch_size": 100,
-  "retention_days": 30
+  "retention_days": 30,
+  "anonymize_moderators": true
 }
 ```
 
 ### Configurable via CLI
 
-| CLI Option           | JSON Key           | Description                            | Default       |
-| -------------------- | ------------------ | -------------------------------------- | ------------- |
-| `--source-subreddit` | `source_subreddit` | Subreddit to read and write logs       | required      |
-| `--wiki-page`        | `wiki_page`        | Wiki page name                         | `modlog`      |
-| `--retention-days`   | `retention_days`   | Keep entries this many days            | `30`          |
-| `--batch-size`       | `batch_size`       | Entries to fetch per run               | `100`         |
-| `--interval`         | `update_interval`  | Seconds between updates in daemon mode | `300`         |
-| `--config`           | –                  | Path to config file                    | `config.json` |
+| CLI Option | JSON Key | Description | Default | Min | Max |
+|------------|----------|-------------|---------|-----|-----|
+| `--source-subreddit` | `source_subreddit` | Subreddit to read and write logs | required | - | - |
+| `--wiki-page` | `wiki_page` | Wiki page name | modlog | - | - |
+| `--retention-days` | `retention_days` | Keep entries this many days | 90 | 1 | 365 |
+| `--batch-size` | `batch_size` | Entries to fetch per run | 50 | 10 | 500 |
+| `--interval` | `update_interval` | Seconds between updates in daemon mode | 600 | 60 | 3600 |
+| `--config` | – | Path to config file | config.json | - | - |
+| `--debug` | – | Enable verbose output | false | - | - |
+| `--show-config-limits` | – | Show configuration limits and defaults | false | - | - |
+| `--force-migrate` | – | Force database migration | false | - | - |
+| `--no-auto-update-config` | – | Disable automatic config file updates | false | - | - |
 
 CLI values override config file values.
+
+## Configuration Limits
+
+All configuration values are automatically validated and enforced within safe limits. Use `--show-config-limits` to see current limits and defaults.
+
+## Automatic Config Updates
+
+The application automatically updates your config file when new configuration options are added, while preserving your existing settings. A backup is created before any changes. Use `--no-auto-update-config` to disable this behavior.
+
+## Database Migration
+
+The database will automatically migrate to the latest schema version on startup. Use `--force-migrate` to manually trigger migration.
 
 ## Wiki Output
 
 Sample wiki table output:
 
 ```markdown
-## 2025-01-15
+## 2025-08-09
 
-| Time | Action | Moderator | Content | Reason | Inquire |
-|------|--------|-----------|---------|--------|---------|
-| 14:25:33 UTC | removepost | ModName | [Post Title](url) | spam | [Contact Mods](modmail_url) |
+| Time | Action | ID | Moderator | Content | Reason | Inquire |
+|------|--------|----|-----------|---------|--------|---------|
+| 08:15:42 UTC | removecomment | n7ravg2 | AutoModerator | [Comment by u/user123](https://www.reddit.com/r/opensignups/comments/1ab2cd3/title/n7ravg2/) | Possibly requesting an invite - [invited] Offers must be [O] 3x Invites to MyAwesomeTracker | [Contact Mods](https://www.reddit.com/message/compose?to=/r/opensignups&subject=Comment%20Removal%20Inquiry...) |
+| 07:45:18 UTC | addremovalreason | 1ab2cd3 | Bakerboy448 | [Post title here](https://www.reddit.com/r/opensignups/comments/1ab2cd3/title/) | Invites - No asking | [Contact Mods](https://www.reddit.com/message/compose?to=/r/opensignups&subject=Removal%20Reason%20Inquiry...) |
+| 06:32:15 UTC | removelink | 1xy9def | AutoModerator | [Another post](https://www.reddit.com/r/opensignups/comments/1xy9def/another/) | No standalone URL in post body | [Contact Mods](https://www.reddit.com/message/compose?to=/r/opensignups&subject=Post%20Removal%20Inquiry...) |
 ```
 
 ## Logging
@@ -122,6 +146,38 @@ Options:
   --debug                  Enable debug logging
   --test                   Run a test and exit
   --continuous             Run continuously
+  --force-modlog           Fetch ALL actions from Reddit API and rebuild wiki
+  --force-wiki             Update wiki even if content appears unchanged
+  --force-all              Do both --force-modlog and --force-wiki
+```
+
+### Force Commands Explained
+
+**--force-modlog**: Complete rebuild from Reddit
+- Fetches ALL recent modlog actions from Reddit API 
+- Stores them in database
+- Rebuilds entire wiki page from database
+- Use when: Starting fresh, major updates, or troubleshooting
+
+**--force-wiki**: Force wiki update only
+- Uses existing database data
+- Forces wiki update even if content hash matches
+- Use when: Format changes, modmail updates, or cache issues
+
+**--force-all**: Complete refresh (replaces old --force)
+- Combines both --force-modlog and --force-wiki
+- Fetches from Reddit AND forces wiki update
+- Use when: Major changes, troubleshooting, or unsure which force to use
+
+```bash
+# Complete rebuild from Reddit API
+python modlog_wiki_publisher.py --source-subreddit usenet --force-modlog
+
+# Update wiki with current database data (bypass cache)  
+python modlog_wiki_publisher.py --source-subreddit usenet --force-wiki
+
+# Do both (equivalent to old --force)
+python modlog_wiki_publisher.py --source-subreddit usenet --force-all
 ```
 
 ## Database
@@ -129,12 +185,36 @@ Options:
 Uses `modlog.db` (SQLite) for deduplication and history:
 
 ```bash
-# View recent actions
+# View recent actions with removal reasons
+sqlite3 modlog.db "SELECT action_id, action_type, moderator, removal_reason, subreddit, created_at FROM processed_actions ORDER BY created_at DESC LIMIT 10;"
+
+# View all columns including removal reasons and target author
 sqlite3 modlog.db "SELECT * FROM processed_actions ORDER BY created_at DESC LIMIT 10;"
+
+# View actions by subreddit
+sqlite3 modlog.db "SELECT action_type, moderator, target_author, removal_reason FROM processed_actions WHERE subreddit = 'usenet' ORDER BY created_at DESC LIMIT 5;"
+
+# Track content lifecycle by target ID
+sqlite3 modlog.db "SELECT target_id, action_type, moderator, removal_reason, datetime(created_at, 'unixepoch') FROM processed_actions WHERE target_id LIKE '%1mkz4jm%' ORDER BY created_at;"
+
+# View removal reasons that are text (not numbers)
+sqlite3 modlog.db "SELECT action_type, removal_reason FROM processed_actions WHERE removal_reason NOT LIKE '%[0-9]%' AND removal_reason != 'remove' LIMIT 5;"
 
 # Clean manually
 sqlite3 modlog.db "DELETE FROM processed_actions WHERE created_at < date('now', '-30 days');"
 ```
+
+### Database Schema
+
+The database includes comprehensive moderation data with full transparency:
+
+- **`removal_reason` column**: Stores actual removal reason text from Reddit's API
+  - AutoModerator actions: Full rule text (e.g., "Possibly requesting an invite - [invited] Offers must be [O]")
+  - addremovalreason actions: Readable removal reason (e.g., "Invites - No asking") instead of template numbers
+  - Manual removals: Moderator-provided text or rule details
+- **`target_author` column**: Actual usernames of content authors (never shows [deleted])
+- **`subreddit` column**: Multi-subreddit support with proper data separation
+- **Unique content IDs**: Comments show comment IDs (e.g., n7ravg2), posts show post IDs
 
 ## Systemd Service (Optional)
 
