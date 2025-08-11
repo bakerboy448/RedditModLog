@@ -1186,13 +1186,22 @@ def run_continuous_mode(reddit, config: Dict[str, Any], force: bool = False):
     while True:
         try:
             error_count = 0  # Reset on successful run
-            actions = process_modlog_actions(reddit, config)
+            new_actions = process_modlog_actions(reddit, config)
             
-            if actions:
-                content = build_wiki_content(actions, config)
+            if new_actions:
+                logger.info(f"Processed {len(new_actions)} new modlog actions")
+            
+            # Always rebuild wiki from ALL relevant actions in database (within retention period)
+            # This matches the behavior of single-run mode
+            all_actions = get_recent_actions_from_db(config, force_all_actions=False, show_only_removals=True)
+            if all_actions:
+                logger.info(f"Found {len(all_actions)} total actions in database for wiki update")
+                content = build_wiki_content(all_actions, config)
                 wiki_page = config.get('wiki_page', 'modlog')
                 update_wiki_page(reddit, config['source_subreddit'], wiki_page, content, force=first_run_force)
                 first_run_force = False
+            else:
+                logger.warning("No actions found in database for wiki update")
             
             cleanup_old_entries(get_config_with_default(config, 'retention_days'))
             
