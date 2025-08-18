@@ -1,0 +1,65 @@
+version: '3.8'
+
+services:
+  reddit-modlog:
+    build: .
+    container_name: reddit-modlog-bot
+    restart: unless-stopped
+    
+    # Environment variables - override these in .env file
+    environment:
+      # Reddit API credentials (REQUIRED)
+      - REDDIT_CLIENT_ID=${REDDIT_CLIENT_ID}
+      - REDDIT_CLIENT_SECRET=${REDDIT_CLIENT_SECRET}
+      - REDDIT_USERNAME=${REDDIT_USERNAME}
+      - REDDIT_PASSWORD=${REDDIT_PASSWORD}
+      
+      # Application settings
+      - SOURCE_SUBREDDIT=${SOURCE_SUBREDDIT:-usenet}
+      - WIKI_PAGE=${WIKI_PAGE:-modlog}
+      - RETENTION_DAYS=${RETENTION_DAYS:-30}
+      - BATCH_SIZE=${BATCH_SIZE:-50}
+      - UPDATE_INTERVAL=${UPDATE_INTERVAL:-300}
+      
+      # Security (enforced)
+      - ANONYMIZE_MODERATORS=true
+      
+      # Optional settings
+      - WIKI_ACTIONS=${WIKI_ACTIONS:-removelink,removecomment,addremovalreason,spamlink,spamcomment,approvelink,approvecomment}
+      - IGNORED_MODERATORS=${IGNORED_MODERATORS:-}
+    
+    # Persist data and logs
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sqlite3; conn = sqlite3.connect('/app/data/modlog.db'); conn.close()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+          cpus: '0.25'
+
+  # Optional: Monitoring container
+  # watchtower:
+  #   image: containrrr/watchtower
+  #   container_name: modlog-watchtower
+  #   restart: unless-stopped
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock
+  #   command: --interval 300 reddit-modlog-bot
+
+networks:
+  default:
+    name: reddit-modlog-network
