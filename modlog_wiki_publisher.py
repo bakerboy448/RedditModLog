@@ -791,9 +791,13 @@ def format_modlog_entry(action, config: Dict[str, Any]) -> Dict[str, str]:
         if extracted_id:
             content_id = extracted_id.replace('t3_', '').replace('t1_', '')[:8]
     
+    display_action = action.action
+    if action.action in ['removelink', 'removecomment'] and get_moderator_name(action, False) == 'AutoModerator':
+        display_action = f"filter-{action.action}"
+    
     return {
         'time': get_action_datetime(action).strftime('%H:%M:%S UTC'),
-        'action': action.action,
+        'action': display_action,
         'id': content_id,
         'moderator': get_moderator_name(action, config.get('anonymize_moderators', True)) or 'Unknown',
         'content': format_content_link(action),

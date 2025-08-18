@@ -72,8 +72,15 @@ The application supports both JSON config files and CLI arguments (CLI overrides
 
 ### Display Options
 - `anonymize_moderators`: Whether to show "HumanModerator" for human mods (default: true)
-  - `true` (default): Shows "AutoMod", "Reddit", or "HumanModerator"
+  - `true` (default): Shows "AutoModerator", "Reddit", or "HumanModerator"
   - `false`: Shows actual moderator usernames
+
+### Action Types Displayed
+- **Manual Actions**: `removelink`, `removecomment`, `spamlink`, `spamcomment`
+- **AutoMod Filters**: `filter-removelink`, `filter-removecomment` (displayed when moderator is AutoModerator)
+- **Removal Reasons**: `addremovalreason` (combined with removal action when possible)
+- **Human Approvals**: `approvelink`, `approvecomment` (only for reversals of Reddit/AutoMod actions)
+- **Context**: Approval actions show original removal reason and moderator
 
 ### Database Features
 - **Multi-subreddit support**: Single database handles multiple subreddits safely
@@ -117,6 +124,8 @@ User profile links are a privacy concern and not useful for modlog purposes.
 - ✅ Added approval action tracking for `approvelink` and `approvecomment`
 - ✅ Smart filtering shows only approvals of Reddit/AutoMod removals in wiki
 - ✅ Combined display of removal actions with their associated removal reasons
+- ✅ AutoMod actions display as `filter-removelink`/`filter-removecomment` to distinguish from manual removals
+- ✅ Approval actions show original removal context: "Approved AutoModerator removal: [reason]"
 - ✅ Cleaner wiki presentation while maintaining full data integrity in database
 
 ## Previous Improvements (v2.1)
