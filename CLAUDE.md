@@ -76,11 +76,21 @@ The application supports both JSON config files and CLI arguments (CLI overrides
   - `false`: Shows actual moderator usernames
 
 ### Action Types Displayed
-- **Manual Actions**: `removelink`, `removecomment`, `spamlink`, `spamcomment`
-- **AutoMod Filters**: `filter-removelink`, `filter-removecomment` (displayed when moderator is AutoModerator)
-- **Removal Reasons**: `addremovalreason` (combined with removal action when possible)
-- **Human Approvals**: `approvelink`, `approvecomment` (only for reversals of Reddit/AutoMod actions)
-- **Context**: Approval actions show original removal reason and moderator
+
+The application uses configurable action type variables for flexibility:
+
+#### Default Configuration
+- **REMOVAL_ACTIONS**: `removelink`, `removecomment`, `spamlink`, `spamcomment`
+- **APPROVAL_ACTIONS**: `approvelink`, `approvecomment` 
+- **REASON_ACTIONS**: `addremovalreason`
+- **DEFAULT_WIKI_ACTIONS**: All above combined
+
+#### Display Behavior
+- **Manual Actions**: Show as-is (e.g., `removelink`, `removecomment`)
+- **AutoMod Filters**: Show with `filter-` prefix (e.g., `filter-removelink`, `filter-removecomment`)
+- **Removal Reasons**: Combined with removal action when targeting same content
+- **Human Approvals**: Only shown for reversals of Reddit/AutoMod actions
+- **Approval Context**: Shows original removal reason and moderator (e.g., "Approved AutoModerator removal: Rule violation")
 
 ### Database Features
 - **Multi-subreddit support**: Single database handles multiple subreddits safely

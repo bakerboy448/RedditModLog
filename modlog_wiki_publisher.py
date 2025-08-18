@@ -23,6 +23,12 @@ BASE_BACKOFF_WAIT = 30
 MAX_BACKOFF_WAIT = 300
 logger = logging.getLogger(__name__)
 
+# Action type configurations
+REMOVAL_ACTIONS = ['removelink', 'removecomment', 'spamlink', 'spamcomment']
+APPROVAL_ACTIONS = ['approvelink', 'approvecomment']
+REASON_ACTIONS = ['addremovalreason']
+DEFAULT_WIKI_ACTIONS = REMOVAL_ACTIONS + REASON_ACTIONS + APPROVAL_ACTIONS
+
 # Configuration limits and defaults
 CONFIG_LIMITS = {
     'retention_days': {'min': 1, 'max': 365, 'default': 90},
@@ -111,7 +117,7 @@ def apply_config_defaults_and_limits(config):
     
     # Set default wiki actions if not specified
     if 'wiki_actions' not in config:
-        config['wiki_actions'] = ['removelink', 'removecomment', 'addremovalreason', 'spamlink', 'spamcomment', 'approvelink', 'approvecomment']
+        config['wiki_actions'] = DEFAULT_WIKI_ACTIONS
         logger.info("Using default wiki_actions: removals, removal reasons, and approvals")
     
     # Validate required fields
@@ -612,14 +618,10 @@ def get_recent_actions_from_db(config: Dict[str, Any], force_all_actions: bool =
             wiki_actions = set(row[0] for row in cursor.fetchall())
             logger.info(f"Force refresh: including all action types: {wiki_actions}")
         elif show_only_removals:
-            wiki_actions = set([
-                'removelink', 'removecomment', 'addremovalreason', 'spamlink', 'spamcomment', 'approvelink', 'approvecomment'
-            ])
+            wiki_actions = set(DEFAULT_WIKI_ACTIONS)
         else:
             # Get configurable list of actions to show in wiki
-            wiki_actions = set(config.get('wiki_actions', [
-                'removelink', 'removecomment', 'addremovalreason', 'spamlink', 'spamcomment', 'approvelink', 'approvecomment'
-            ]))
+            wiki_actions = set(config.get('wiki_actions', DEFAULT_WIKI_ACTIONS))
         
         # Get recent actions within retention period
         retention_days = get_config_with_default(config, 'retention_days')
@@ -792,7 +794,7 @@ def format_modlog_entry(action, config: Dict[str, Any]) -> Dict[str, str]:
             content_id = extracted_id.replace('t3_', '').replace('t1_', '')[:8]
     
     display_action = action.action
-    if action.action in ['removelink', 'removecomment'] and get_moderator_name(action, False) == 'AutoModerator':
+    if action.action in REMOVAL_ACTIONS and get_moderator_name(action, False) == 'AutoModerator':
         display_action = f"filter-{action.action}"
     
     return {
@@ -889,7 +891,7 @@ def build_wiki_content(actions: List, config: Dict[str, Any]) -> str:
     
     filtered_actions = []
     for action in actions:
-        if action.action in ['approvelink', 'approvecomment']:
+        if action.action in APPROVAL_ACTIONS:
             should_include = False
             content_id = extract_content_id_from_permalink(get_target_permalink(action))
             if content_id:
@@ -900,12 +902,13 @@ def build_wiki_content(actions: List, config: Dict[str, Any]) -> str:
                     conn = sqlite3.connect(DB_PATH)
                     cursor = conn.cursor()
                     
-                    cursor.execute("""
+                    removal_placeholders = ','.join(['?'] * len(REMOVAL_ACTIONS))
+                    cursor.execute(f"""
                         SELECT moderator, removal_reason FROM processed_actions 
-                        WHERE target_permalink LIKE ? AND action_type IN ('removelink', 'removecomment', 'spamlink', 'spamcomment')
+                        WHERE target_permalink LIKE ? AND action_type IN ({removal_placeholders})
                         AND LOWER(moderator) IN ('reddit', 'automoderator')
                         ORDER BY created_at DESC LIMIT 1
-                    """, (f'%{content_id}%',))
+                    """, [f'%{content_id}%'] + REMOVAL_ACTIONS)
                     
                     prior_removal = cursor.fetchone()
                     conn.close()
@@ -954,12 +957,12 @@ def build_wiki_content(actions: List, config: Dict[str, Any]) -> str:
         other_actions = []
         
         for action in target_actions:
-            if action.action in ['removelink', 'removecomment', 'spamlink', 'spamcomment']:
+            if action.action in REMOVAL_ACTIONS:
                 if not removal_action:
                     removal_action = action
                 else:
                     other_actions.append(action)
-            elif action.action == 'addremovalreason':
+            elif action.action in REASON_ACTIONS:
                 if not removal_reason_action:
                     removal_reason_action = action
                 else:
@@ -1087,9 +1090,7 @@ def process_modlog_actions(reddit, config: Dict[str, Any]) -> List:
         logger.info(f"Fetching modlog entries from /r/{config['source_subreddit']}")
         
         # Get configurable list of actions to show in wiki
-        wiki_actions = set(config.get('wiki_actions', [
-            'removelink', 'removecomment', 'addremovalreason', 'spamlink', 'spamcomment', 'approvelink', 'approvecomment'
-        ]))
+        wiki_actions = set(config.get('wiki_actions', DEFAULT_WIKI_ACTIONS))
         
         for action in subreddit.mod.log(limit=batch_size):
             mod_name = get_moderator_name(action, False)  # Use actual name for ignore check
