@@ -178,6 +178,10 @@ def apply_config_defaults_and_limits(config):
         if field not in reddit_config or not reddit_config[field]:
             raise ValueError(f"Missing required reddit configuration field: {field}")
     
+    # CRITICAL SECURITY CHECK: Never allow moderator de-anonymization on live Reddit
+    if not config.get('anonymize_moderators', True):
+        raise ValueError("SECURITY: anonymize_moderators=false is not allowed. This would expose moderator identities publicly.")
+    
     return config
 
 def migrate_database():

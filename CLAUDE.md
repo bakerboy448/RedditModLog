@@ -81,7 +81,7 @@ All configuration options can be set via environment variables:
 - `RETENTION_DAYS`: Database cleanup period in days
 - `BATCH_SIZE`: Entries fetched per run
 - `UPDATE_INTERVAL`: Seconds between updates in daemon mode
-- `ANONYMIZE_MODERATORS`: `true` or `false` for moderator anonymization
+- `ANONYMIZE_MODERATORS`: **MUST be `true`** (enforced for security)
 
 #### Advanced Settings
 - `WIKI_ACTIONS`: Comma-separated list of actions to show (e.g., "removelink,removecomment,approvelink")
@@ -129,9 +129,11 @@ python modlog_wiki_publisher.py --debug --batch-size 25  # CLI takes priority
 ```
 
 ### Display Options
-- `anonymize_moderators`: Whether to show "HumanModerator" for human mods (default: true)
-  - `true` (default): Shows "AutoModerator", "Reddit", or "HumanModerator"
-  - `false`: Shows actual moderator usernames
+- `anonymize_moderators`: **REQUIRED** to be `true` for security (default: true)
+  - `true` (ENFORCED): Shows "AutoModerator", "Reddit", or "HumanModerator"  
+  - `false`: **BLOCKED** - Would expose moderator identities publicly
+
+**SECURITY NOTE**: Setting `anonymize_moderators=false` is permanently disabled to protect moderator privacy. The application will refuse to start if this is attempted.
 
 ### Action Types Displayed
 
@@ -186,7 +188,16 @@ Use `--test` flag to verify configuration and Reddit API connectivity without ma
 
 User profile links are a privacy concern and not useful for modlog purposes.
 
-## Recent Improvements (v2.2)
+## Recent Improvements (v1.2)
+
+### Environment Variable Support & Validation
+- ✅ Complete environment variable support for all configuration options
+- ✅ Standard configuration hierarchy: CLI args → Environment vars → Config file
+- ✅ Container/Docker ready with secure credential handling
+- ✅ Strict validation with 44+ known Reddit modlog actions in `VALID_MODLOG_ACTIONS`
+- ✅ Fail-fast validation rejects invalid actions with clear error messages
+
+## Previous Improvements (v1.1)
 
 ### Enhanced Removal Tracking
 - ✅ Added approval action tracking for `approvelink` and `approvecomment`
