@@ -58,17 +58,75 @@ sqlite3 modlog.db "SELECT target_id, action_type, moderator, removal_reason, dat
 sqlite3 modlog.db "DELETE FROM processed_actions WHERE created_at < date('now', '-30 days');"
 ```
 
-## Key Configuration
+## Configuration
 
-The application supports both JSON config files and CLI arguments (CLI overrides JSON):
+The application supports multiple configuration methods with the following priority (highest to lowest):
+1. **Command line arguments** (highest priority)
+2. **Environment variables** (override config file)  
+3. **JSON config file** (base configuration)
 
-### Core Options
+### Environment Variables
+
+All configuration options can be set via environment variables:
+
+#### Reddit Credentials
+- `REDDIT_CLIENT_ID`: Reddit app client ID
+- `REDDIT_CLIENT_SECRET`: Reddit app client secret  
+- `REDDIT_USERNAME`: Reddit bot username
+- `REDDIT_PASSWORD`: Reddit bot password
+
+#### Application Settings
+- `SOURCE_SUBREDDIT`: Target subreddit name
+- `WIKI_PAGE`: Wiki page name (default: "modlog")
+- `RETENTION_DAYS`: Database cleanup period in days
+- `BATCH_SIZE`: Entries fetched per run
+- `UPDATE_INTERVAL`: Seconds between updates in daemon mode
+- `ANONYMIZE_MODERATORS`: `true` or `false` for moderator anonymization
+
+#### Advanced Settings
+- `WIKI_ACTIONS`: Comma-separated list of actions to show (e.g., "removelink,removecomment,approvelink")
+- `IGNORED_MODERATORS`: Comma-separated list of moderators to ignore
+
+### Command Line Options
 - `--source-subreddit`: Target subreddit for reading/writing logs
 - `--wiki-page`: Wiki page name (default: "modlog")
 - `--retention-days`: Database cleanup period (default: 30)
 - `--batch-size`: Entries fetched per run (default: 100)
 - `--interval`: Seconds between updates in daemon mode (default: 300)
 - `--debug`: Enable verbose logging
+
+### Configuration Examples
+
+#### Using Environment Variables (Docker/Container)
+```bash
+# Set credentials via environment
+export REDDIT_CLIENT_ID="your_client_id"
+export REDDIT_CLIENT_SECRET="your_client_secret"
+export REDDIT_USERNAME="your_bot_username"
+export REDDIT_PASSWORD="your_bot_password"
+export SOURCE_SUBREDDIT="usenet"
+
+# Run without config file
+python modlog_wiki_publisher.py
+```
+
+#### Docker Example
+```bash
+docker run -e REDDIT_CLIENT_ID="id" \
+           -e REDDIT_CLIENT_SECRET="secret" \
+           -e REDDIT_USERNAME="bot" \
+           -e REDDIT_PASSWORD="pass" \
+           -e SOURCE_SUBREDDIT="usenet" \
+           -e ANONYMIZE_MODERATORS="true" \
+           your-modlog-image
+```
+
+#### Mixed Configuration
+```bash
+# Use config file + env overrides + CLI args
+export SOURCE_SUBREDDIT="usenet"  # Override config file
+python modlog_wiki_publisher.py --debug --batch-size 25  # CLI takes priority
+```
 
 ### Display Options
 - `anonymize_moderators`: Whether to show "HumanModerator" for human mods (default: true)

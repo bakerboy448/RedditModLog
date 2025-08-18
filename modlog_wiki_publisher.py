@@ -29,6 +29,32 @@ APPROVAL_ACTIONS = ['approvelink', 'approvecomment']
 REASON_ACTIONS = ['addremovalreason']
 DEFAULT_WIKI_ACTIONS = REMOVAL_ACTIONS + REASON_ACTIONS + APPROVAL_ACTIONS
 
+# Valid Reddit modlog actions (hardcoded for validation)
+VALID_MODLOG_ACTIONS = [
+    # Content removal
+    'removelink', 'removecomment', 'spamlink', 'spamcomment',
+    # Content approval  
+    'approvelink', 'approvecomment',
+    # Moderation reasons and notes
+    'addremovalreason', 'addnote', 'deletenote',
+    # User actions
+    'banuser', 'unbanuser', 'muteuser', 'unmuteuser', 'invitemoderator', 'acceptmoderatorinvite',
+    # Post management
+    'distinguish', 'undistinguish', 'sticky', 'unsticky', 'lock', 'unlock', 'marknsfw', 'unmarknsfw',
+    # Wiki actions
+    'wikirevise', 'wikipagelisted', 'wikipermlevel', 'wikibanned', 'wikicontributor',
+    # Settings and rules
+    'editsettings', 'editflair', 'createrule', 'editrule', 'deleterule', 'reorderrules',
+    # Reports and modmail
+    'ignorereports', 'unignorereports', 'request_assistance',
+    # Community features
+    'community_widgets', 'community_welcome_page', 'edit_post_requirements', 'edit_comment_requirements',
+    # Saved responses
+    'edit_saved_response',
+    # Collections
+    'addtocollection', 'removefromcollection'
+]
+
 # Configuration limits and defaults
 CONFIG_LIMITS = {
     'retention_days': {'min': 1, 'max': 365, 'default': 90},
@@ -106,6 +132,23 @@ def validate_config_value(key, value, config_limits):
     
     return value
 
+def validate_wiki_actions(wiki_actions):
+    """Validate wiki_actions against known Reddit modlog actions"""
+    if not isinstance(wiki_actions, list):
+        raise ValueError("wiki_actions must be a list")
+    
+    if not wiki_actions:
+        logger.info("Empty wiki_actions, using defaults")
+        return DEFAULT_WIKI_ACTIONS
+    
+    invalid_actions = [action for action in wiki_actions if action not in VALID_MODLOG_ACTIONS]
+    
+    if invalid_actions:
+        raise ValueError(f"Invalid modlog actions: {invalid_actions}. Valid actions: {sorted(VALID_MODLOG_ACTIONS)}")
+    
+    logger.info(f"Validated {len(wiki_actions)} wiki_actions: {wiki_actions}")
+    return wiki_actions
+
 def apply_config_defaults_and_limits(config):
     """Apply default values and enforce limits on configuration"""
     for key, limits in CONFIG_LIMITS.items():
@@ -119,6 +162,8 @@ def apply_config_defaults_and_limits(config):
     if 'wiki_actions' not in config:
         config['wiki_actions'] = DEFAULT_WIKI_ACTIONS
         logger.info("Using default wiki_actions: removals, removal reasons, and approvals")
+    else:
+        config['wiki_actions'] = validate_wiki_actions(config['wiki_actions'])
     
     # Validate required fields
     required_fields = ['reddit', 'source_subreddit']
@@ -1117,10 +1162,57 @@ def process_modlog_actions(reddit, config: Dict[str, Any]) -> List:
         logger.error(f"Error processing modlog actions: {e}")
         raise
 
+def load_env_config() -> Dict[str, Any]:
+    """Load configuration from environment variables"""
+    env_config = {}
+    
+    # Reddit credentials
+    reddit_config = {}
+    if os.getenv('REDDIT_CLIENT_ID'):
+        reddit_config['client_id'] = os.getenv('REDDIT_CLIENT_ID')
+    if os.getenv('REDDIT_CLIENT_SECRET'):
+        reddit_config['client_secret'] = os.getenv('REDDIT_CLIENT_SECRET')
+    if os.getenv('REDDIT_USERNAME'):
+        reddit_config['username'] = os.getenv('REDDIT_USERNAME')
+    if os.getenv('REDDIT_PASSWORD'):
+        reddit_config['password'] = os.getenv('REDDIT_PASSWORD')
+    
+    if reddit_config:
+        env_config['reddit'] = reddit_config
+    
+    # Application settings
+    if os.getenv('SOURCE_SUBREDDIT'):
+        env_config['source_subreddit'] = os.getenv('SOURCE_SUBREDDIT')
+    if os.getenv('WIKI_PAGE'):
+        env_config['wiki_page'] = os.getenv('WIKI_PAGE')
+    if os.getenv('RETENTION_DAYS'):
+        env_config['retention_days'] = int(os.getenv('RETENTION_DAYS'))
+    if os.getenv('BATCH_SIZE'):
+        env_config['batch_size'] = int(os.getenv('BATCH_SIZE'))
+    if os.getenv('UPDATE_INTERVAL'):
+        env_config['update_interval'] = int(os.getenv('UPDATE_INTERVAL'))
+    if os.getenv('ANONYMIZE_MODERATORS'):
+        env_config['anonymize_moderators'] = os.getenv('ANONYMIZE_MODERATORS').lower() == 'true'
+    
+    # Wiki actions (comma-separated list)
+    if os.getenv('WIKI_ACTIONS'):
+        try:
+            raw_actions = [action.strip() for action in os.getenv('WIKI_ACTIONS').split(',')]
+            env_config['wiki_actions'] = validate_wiki_actions(raw_actions)
+        except ValueError as e:
+            logger.error(f"WIKI_ACTIONS environment variable invalid: {e}")
+            raise
+    
+    # Ignored moderators (comma-separated list)
+    if os.getenv('IGNORED_MODERATORS'):
+        env_config['ignored_moderators'] = [mod.strip() for mod in os.getenv('IGNORED_MODERATORS').split(',')]
+    
+    return env_config
+
 def load_config(config_path: str, auto_update: bool = True) -> Dict[str, Any]:
-    """Load and validate configuration"""
+    """Load and validate configuration from file and environment variables"""
     try:
-        # Load existing config
+        # Load existing config from file
         original_config = {}
         config_updated = False
         
@@ -1128,8 +1220,14 @@ def load_config(config_path: str, auto_update: bool = True) -> Dict[str, Any]:
             with open(config_path, 'r') as f:
                 original_config = json.load(f)
         except FileNotFoundError:
-            logger.error(f"Config file not found: {config_path}")
-            raise
+            logger.warning(f"Config file not found: {config_path}, using environment variables only")
+            original_config = {}
+        
+        # Override with environment variables
+        env_config = load_env_config()
+        if env_config:
+            logger.info("Using environment variable overrides for configuration")
+            original_config.update(env_config)
         
         # Store original config for comparison
         config_before = original_config.copy()
