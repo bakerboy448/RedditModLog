@@ -769,6 +769,8 @@ def format_modlog_entry(action, config: Dict[str, Any]) -> Dict[str, str]:
     
     if hasattr(action, 'combined_reason') and action.combined_reason:
         reason_text = str(action.combined_reason).strip()
+    elif hasattr(action, 'approval_context') and action.approval_context:
+        reason_text = str(action.approval_context).strip()
     else:
         parsed_mod_note = ''
         if hasattr(action, 'mod_note') and action.mod_note:
@@ -885,28 +887,37 @@ def build_wiki_content(actions: List, config: Dict[str, Any]) -> str:
     for action in actions:
         if action.action in ['approvelink', 'approvecomment']:
             should_include = False
-            target_id = extract_target_id(action)
+            content_id = extract_content_id_from_permalink(get_target_permalink(action))
+            if content_id:
+                content_id = content_id.replace('t3_', '').replace('t1_', '')
             
-            if target_id:
+            if content_id:
                 try:
                     conn = sqlite3.connect(DB_PATH)
                     cursor = conn.cursor()
                     
                     cursor.execute("""
-                        SELECT moderator FROM processed_actions 
-                        WHERE target_id = ? AND action_type IN ('removelink', 'removecomment', 'spamlink', 'spamcomment')
+                        SELECT moderator, removal_reason FROM processed_actions 
+                        WHERE target_permalink LIKE ? AND action_type IN ('removelink', 'removecomment', 'spamlink', 'spamcomment')
                         AND LOWER(moderator) IN ('reddit', 'automoderator')
                         ORDER BY created_at DESC LIMIT 1
-                    """, (target_id,))
+                    """, (f'%{content_id}%',))
                     
                     prior_removal = cursor.fetchone()
                     conn.close()
                     
                     if prior_removal:
                         should_include = True
-                        logger.debug(f"Including approval {action.id} - content {target_id} was previously removed by {prior_removal[0]}")
+                        original_moderator, original_reason = prior_removal
+                        
+                        approval_reason = f"Approved {original_moderator} removal"
+                        if original_reason and original_reason.strip() and original_reason != "-":
+                            approval_reason += f": {original_reason.strip()}"
+                        
+                        action.approval_context = approval_reason
+                        logger.debug(f"Including approval {action.id} - content {content_id} was previously removed by {original_moderator}")
                     else:
-                        logger.debug(f"Excluding approval {action.id} - no prior Reddit/AutoMod removal found for content {target_id}")
+                        logger.debug(f"Excluding approval {action.id} - no prior Reddit/AutoMod removal found for content {content_id}")
                         
                 except Exception as e:
                     logger.warning(f"Error checking prior removals for approval {action.id}: {e}")
