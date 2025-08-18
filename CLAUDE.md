@@ -111,7 +111,15 @@ Use `--test` flag to verify configuration and Reddit API connectivity without ma
 
 User profile links are a privacy concern and not useful for modlog purposes.
 
-## Recent Improvements (v2.1)
+## Recent Improvements (v2.2)
+
+### Enhanced Removal Tracking
+- ✅ Added approval action tracking for `approvelink` and `approvecomment`
+- ✅ Smart filtering shows only approvals of Reddit/AutoMod removals in wiki
+- ✅ Combined display of removal actions with their associated removal reasons
+- ✅ Cleaner wiki presentation while maintaining full data integrity in database
+
+## Previous Improvements (v2.1)
 
 ### Multi-Subreddit Database Support
 - ✅ Fixed critical error that prevented multi-subreddit databases from working

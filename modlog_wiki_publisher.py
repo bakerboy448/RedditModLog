@@ -111,8 +111,8 @@ def apply_config_defaults_and_limits(config):
     
     # Set default wiki actions if not specified
     if 'wiki_actions' not in config:
-        config['wiki_actions'] = ['removelink', 'removecomment', 'addremovalreason', 'spamlink', 'spamcomment']
-        logger.info("Using default wiki_actions: removals and removal reasons only")
+        config['wiki_actions'] = ['removelink', 'removecomment', 'addremovalreason', 'spamlink', 'spamcomment', 'approvelink', 'approvecomment']
+        logger.info("Using default wiki_actions: removals, removal reasons, and approvals")
     
     # Validate required fields
     required_fields = ['reddit', 'source_subreddit']
@@ -765,31 +765,29 @@ def extract_content_id_from_permalink(permalink):
 def format_modlog_entry(action, config: Dict[str, Any]) -> Dict[str, str]:
     """Format modlog entry - matches main branch approach exactly"""
     
-    # Handle removal reasons like main branch - match exact logic
     reason_text = "-"
     
-    # Get mod note first (like main branch parsed_mod_note)
-    parsed_mod_note = ''
-    if hasattr(action, 'mod_note') and action.mod_note:
-        parsed_mod_note = str(action.mod_note).strip()
-    elif hasattr(action, 'details') and action.details:
-        parsed_mod_note = str(action.details).strip()
+    if hasattr(action, 'combined_reason') and action.combined_reason:
+        reason_text = str(action.combined_reason).strip()
+    else:
+        parsed_mod_note = ''
+        if hasattr(action, 'mod_note') and action.mod_note:
+            parsed_mod_note = str(action.mod_note).strip()
+        elif hasattr(action, 'details') and action.details:
+            parsed_mod_note = str(action.details).strip()
+        
+        if hasattr(action, 'details') and action.details:
+            reason_text = str(action.details).strip()
+            if action.action in ['addremovalreason']:
+                reason_text = parsed_mod_note if parsed_mod_note else reason_text
+        elif parsed_mod_note:
+            reason_text = parsed_mod_note
     
-    # Process details like main branch
-    if hasattr(action, 'details') and action.details:
-        reason_text = str(action.details).strip()
-        # For addremovalreason, use mod_note instead of details (main branch logic)
-        if action.action in ['addremovalreason']:
-            reason_text = parsed_mod_note if parsed_mod_note else reason_text
-    elif parsed_mod_note:
-        reason_text = parsed_mod_note
-    
-    # Extract content ID for tracking
     content_id = "-"
     if hasattr(action, 'target_permalink') and action.target_permalink:
         extracted_id = extract_content_id_from_permalink(action.target_permalink)
         if extracted_id:
-            content_id = extracted_id.replace('t3_', '').replace('t1_', '')[:8]  # Short ID for table
+            content_id = extracted_id.replace('t3_', '').replace('t1_', '')[:8]
     
     return {
         'time': get_action_datetime(action).strftime('%H:%M:%S UTC'),
@@ -882,6 +880,89 @@ def build_wiki_content(actions: List, config: Dict[str, Any]) -> str:
     if mixed_subreddits:
         logger.error(f"CRITICAL: Mixed subreddit data in actions for {target_subreddit}: {mixed_subreddits}")
         raise ValueError(f"Cannot build wiki content - mixed subreddit data detected: {mixed_subreddits}")
+    
+    filtered_actions = []
+    for action in actions:
+        if action.action in ['approvelink', 'approvecomment']:
+            should_include = False
+            target_id = extract_target_id(action)
+            
+            if target_id:
+                try:
+                    conn = sqlite3.connect(DB_PATH)
+                    cursor = conn.cursor()
+                    
+                    cursor.execute("""
+                        SELECT moderator FROM processed_actions 
+                        WHERE target_id = ? AND action_type IN ('removelink', 'removecomment', 'spamlink', 'spamcomment')
+                        AND LOWER(moderator) IN ('reddit', 'automoderator')
+                        ORDER BY created_at DESC LIMIT 1
+                    """, (target_id,))
+                    
+                    prior_removal = cursor.fetchone()
+                    conn.close()
+                    
+                    if prior_removal:
+                        should_include = True
+                        logger.debug(f"Including approval {action.id} - content {target_id} was previously removed by {prior_removal[0]}")
+                    else:
+                        logger.debug(f"Excluding approval {action.id} - no prior Reddit/AutoMod removal found for content {target_id}")
+                        
+                except Exception as e:
+                    logger.warning(f"Error checking prior removals for approval {action.id}: {e}")
+                    should_include = False
+            
+            if should_include:
+                filtered_actions.append(action)
+        else:
+            filtered_actions.append(action)
+    
+    actions = filtered_actions
+    
+    combined_actions = []
+    actions_by_target = {}
+    
+    for action in actions:
+        target_id = extract_target_id(action)
+        if target_id not in actions_by_target:
+            actions_by_target[target_id] = []
+        actions_by_target[target_id].append(action)
+    
+    for target_id, target_actions in actions_by_target.items():
+        removal_action = None
+        removal_reason_action = None
+        other_actions = []
+        
+        for action in target_actions:
+            if action.action in ['removelink', 'removecomment', 'spamlink', 'spamcomment']:
+                if not removal_action:
+                    removal_action = action
+                else:
+                    other_actions.append(action)
+            elif action.action == 'addremovalreason':
+                if not removal_reason_action:
+                    removal_reason_action = action
+                else:
+                    other_actions.append(action)
+            else:
+                other_actions.append(action)
+        
+        if removal_action and removal_reason_action:
+            if hasattr(removal_reason_action, 'details') and removal_reason_action.details:
+                removal_action.combined_reason = removal_reason_action.details
+            elif hasattr(removal_reason_action, 'mod_note') and removal_reason_action.mod_note:
+                removal_action.combined_reason = removal_reason_action.mod_note
+            
+            combined_actions.append(removal_action)
+        else:
+            if removal_action:
+                combined_actions.append(removal_action)
+            if removal_reason_action:
+                combined_actions.append(removal_reason_action)
+        
+        combined_actions.extend(other_actions)
+    
+    actions = combined_actions
     
     # Enforce wiki entry limits
     max_entries = get_config_with_default(config, 'max_wiki_entries_per_page')
@@ -987,7 +1068,7 @@ def process_modlog_actions(reddit, config: Dict[str, Any]) -> List:
         
         # Get configurable list of actions to show in wiki
         wiki_actions = set(config.get('wiki_actions', [
-            'removelink', 'removecomment', 'addremovalreason', 'spamlink', 'spamcomment'
+            'removelink', 'removecomment', 'addremovalreason', 'spamlink', 'spamcomment', 'approvelink', 'approvecomment'
         ]))
         
         for action in subreddit.mod.log(limit=batch_size):
