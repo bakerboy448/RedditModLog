@@ -613,12 +613,12 @@ def get_recent_actions_from_db(config: Dict[str, Any], force_all_actions: bool =
             logger.info(f"Force refresh: including all action types: {wiki_actions}")
         elif show_only_removals:
             wiki_actions = set([
-                'removelink', 'removecomment', 'addremovalreason', 'spamlink', 'spamcomment'
+                'removelink', 'removecomment', 'addremovalreason', 'spamlink', 'spamcomment', 'approvelink', 'approvecomment'
             ])
         else:
             # Get configurable list of actions to show in wiki
             wiki_actions = set(config.get('wiki_actions', [
-                'removelink', 'removecomment', 'addremovalreason', 'spamlink', 'spamcomment'
+                'removelink', 'removecomment', 'addremovalreason', 'spamlink', 'spamcomment', 'approvelink', 'approvecomment'
             ]))
         
         # Get recent actions within retention period
