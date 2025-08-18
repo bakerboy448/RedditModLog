@@ -923,10 +923,15 @@ def build_wiki_content(actions: List, config: Dict[str, Any]) -> str:
     actions_by_target = {}
     
     for action in actions:
-        target_id = extract_target_id(action)
-        if target_id not in actions_by_target:
-            actions_by_target[target_id] = []
-        actions_by_target[target_id].append(action)
+        content_id = extract_content_id_from_permalink(get_target_permalink(action))
+        if content_id:
+            content_id = content_id.replace('t3_', '').replace('t1_', '')
+        else:
+            content_id = extract_target_id(action)
+        
+        if content_id not in actions_by_target:
+            actions_by_target[content_id] = []
+        actions_by_target[content_id].append(action)
     
     for target_id, target_actions in actions_by_target.items():
         removal_action = None
