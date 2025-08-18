@@ -240,9 +240,80 @@ User profile links are a privacy concern and not useful for modlog purposes.
 - ✅ Database schema at version 5 with all required columns
 - ✅ Consistent Reddit API field usage (action.details vs action.description)
 
+## Docker Deployment
+
+### Building and Running
+
+```bash
+# Build the Docker image
+docker build -t reddit-modlog:latest .
+
+# Run with docker-compose (recommended)
+docker-compose up -d
+
+# Run directly with Docker
+docker run -d \
+  --name reddit-modlog-bot \
+  --restart unless-stopped \
+  -e REDDIT_CLIENT_ID=your_client_id \
+  -e REDDIT_CLIENT_SECRET=your_client_secret \
+  -e REDDIT_USERNAME=your_username \
+  -e REDDIT_PASSWORD=your_password \
+  -e SOURCE_SUBREDDIT=your_subreddit \
+  -v ./data:/app/data \
+  -v ./logs:/app/logs \
+  reddit-modlog:latest
+```
+
+### Environment Configuration
+
+Create a `.env` file in the project root:
+
+```env
+# Reddit API credentials (REQUIRED)
+REDDIT_CLIENT_ID=your_client_id
+REDDIT_CLIENT_SECRET=your_client_secret
+REDDIT_USERNAME=your_bot_username
+REDDIT_PASSWORD=your_bot_password
+
+# Application settings
+SOURCE_SUBREDDIT=your_subreddit
+WIKI_PAGE=modlog
+RETENTION_DAYS=30
+BATCH_SIZE=50
+UPDATE_INTERVAL=300
+
+# Wiki actions to process
+WIKI_ACTIONS=removelink,removecomment,addremovalreason,spamlink,spamcomment,approvelink,approvecomment
+```
+
+### CI/CD Pipeline
+
+The project includes GitHub Actions for automated Docker builds:
+- **Triggers**: Git tags (v*) and manual workflow dispatch
+- **Registries**: GitHub Container Registry (ghcr.io) and Docker Hub
+- **Platforms**: linux/amd64, linux/arm64
+- **Manual approval required** for main branch deployments
+
+### Pre-commit Hooks
+
+Install and use pre-commit hooks for code quality:
+
+```bash
+# Install pre-commit
+pip install pre-commit
+
+# Install hooks
+pre-commit install
+
+# Run manually
+pre-commit run --all-files
+```
+
 ## Development Guidelines
 
 ### Git Workflow
+- **NEVER push to main without manual approval**
 - If branch is not main, you may commit and push if a PR is draft or not open
 - Use conventional commits for all changes
 - Use multiple commits if needed, or patch if easier
