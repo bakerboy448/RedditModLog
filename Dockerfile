@@ -1,5 +1,19 @@
 FROM python:3.11-slim
 
+# OCI Image Spec Annotations
+ARG BUILD_DATE
+ARG VCS_REF
+ARG VERSION
+LABEL org.opencontainers.image.created=$BUILD_DATE \
+      org.opencontainers.image.url="https://github.com/$GITHUB_REPOSITORY" \
+      org.opencontainers.image.source="https://github.com/$GITHUB_REPOSITORY" \
+      org.opencontainers.image.version=$VERSION \
+      org.opencontainers.image.revision=$VCS_REF \
+      org.opencontainers.image.vendor="RedditModLog" \
+      org.opencontainers.image.title="Reddit Moderation Log Publisher" \
+      org.opencontainers.image.description="Automated Reddit moderation log scraper and wiki publisher" \
+      org.opencontainers.image.licenses="MIT"
+
 # Set working directory
 WORKDIR /app
 
