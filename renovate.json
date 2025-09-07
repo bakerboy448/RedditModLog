@@ -1,0 +1,79 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "timezone": "UTC",
+  "schedule": ["before 6am on monday"],
+  "labels": ["dependencies"],
+  "assigneesFromCodeOwners": true,
+  "reviewersFromCodeOwners": true,
+  
+  "packageRules": [
+    {
+      "description": "Python dependencies - group minor and patch updates",
+      "matchManagers": ["pip_requirements"],
+      "groupName": "Python dependencies",
+      "matchUpdateTypes": ["minor", "patch"],
+      "automerge": false,
+      "reviewRequired": true
+    },
+    {
+      "description": "Python major version updates - separate PRs with high priority",
+      "matchManagers": ["pip_requirements"],
+      "matchUpdateTypes": ["major"],
+      "addLabels": ["major-update"],
+      "prPriority": 10,
+      "automerge": false,
+      "reviewRequired": true
+    },
+    {
+      "description": "Docker base image updates",
+      "matchManagers": ["dockerfile"],
+      "matchPackageNames": ["python"],
+      "groupName": "Docker Python base image",
+      "automerge": false,
+      "reviewRequired": true,
+      "addLabels": ["docker"]
+    },
+    {
+      "description": "Docker Compose version updates",
+      "matchManagers": ["docker-compose"],
+      "groupName": "Docker Compose dependencies",
+      "automerge": false,
+      "reviewRequired": true,
+      "addLabels": ["docker"]
+    }
+  ],
+
+  "pip_requirements": {
+    "fileMatch": ["(^|/)requirements.*\\.txt$"]
+  },
+
+  "prConcurrentLimit": 3,
+  "prHourlyLimit": 2,
+  
+  "commitMessageTopic": "{{depName}}",
+  "commitMessageAction": "update",
+  "commitMessageExtra": "to {{#if isPinDigest}}{{{newDigestShort}}}{{else}}{{#if isMajor}}{{prettyNewMajor}}{{else}}{{#if isSingleVersion}}{{prettyNewVersion}}{{else}}{{#if newValue}}{{{newValue}}}{{else}}{{{newDigestShort}}}{{/if}}{{/if}}{{/if}}{{/if}}",
+  
+  "prTitle": "{{#if isPin}}Pin{{else}}Update{{/if}} {{depName}} {{#if isMajor}}(major){{else}}{{#if isMinor}}(minor){{else}}{{#if isPatch}}(patch){{/if}}{{/if}}{{/if}}",
+  "prBodyTemplate": "{{{header}}}{{{table}}}{{{notes}}}{{{changelogs}}}{{{configDescription}}}{{{controls}}}{{{footer}}}",
+  
+  "enabledManagers": [
+    "dockerfile",
+    "docker-compose",
+    "pip_requirements"
+  ],
+
+  "ignorePaths": [
+    "**/node_modules/**",
+    "**/bower_components/**",
+    "**/vendor/**",
+    "**/.venv/**",
+    "**/venv/**"
+  ],
+
+  "platformAutomerge": false,
+  "requiredStatusChecks": null
+}
