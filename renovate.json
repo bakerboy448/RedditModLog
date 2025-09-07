@@ -15,8 +15,7 @@
       "matchManagers": ["pip_requirements"],
       "groupName": "Python dependencies",
       "matchUpdateTypes": ["minor", "patch"],
-      "automerge": false,
-      "reviewRequired": true
+      "automerge": false
     },
     {
       "description": "Python major version updates - separate PRs with high priority",
@@ -24,8 +23,7 @@
       "matchUpdateTypes": ["major"],
       "addLabels": ["major-update"],
       "prPriority": 10,
-      "automerge": false,
-      "reviewRequired": true
+      "automerge": false
     },
     {
       "description": "Docker base image updates",
@@ -33,7 +31,6 @@
       "matchPackageNames": ["python"],
       "groupName": "Docker Python base image",
       "automerge": false,
-      "reviewRequired": true,
       "addLabels": ["docker"]
     },
     {
@@ -41,7 +38,6 @@
       "matchManagers": ["docker-compose"],
       "groupName": "Docker Compose dependencies",
       "automerge": false,
-      "reviewRequired": true,
       "addLabels": ["docker"]
     }
   ],
