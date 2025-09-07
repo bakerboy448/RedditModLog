@@ -5,7 +5,7 @@ This is a Python-based Reddit moderation log publisher that scrapes mod actions 
 
 ## Code Style & Standards
 - **No comments on self-documenting code** - avoid obvious comments
-- **Use conventional commits** for all changes  
+- **Use conventional commits** for all changes
 - **Environment variables** for all configuration (Docker-ready)
 - **Security first**: Never expose moderator identities, always anonymize
 - **Error handling**: Graceful degradation, comprehensive logging
@@ -43,7 +43,7 @@ This is a Python-based Reddit moderation log publisher that scrapes mod actions 
 
 ## Testing & Quality
 - **Pre-commit hooks**: Black, flake8, isort, mypy, security scanning
-- **Validation**: Strict input validation with clear error messages  
+- **Validation**: Strict input validation with clear error messages
 - **Environment testing**: `--test` flag for configuration validation
 - **CI/CD**: Multi-platform builds with manual approval for main branch
 
@@ -55,14 +55,14 @@ This is a Python-based Reddit moderation log publisher that scrapes mod actions 
 
 ## Forbidden Patterns
 - ❌ Hardcoded credentials or configuration
-- ❌ User profile links in public wikis  
+- ❌ User profile links in public wikis
 - ❌ Unescaped markdown content in tables
 - ❌ Missing error handling for Reddit API calls
 - ❌ Exposing real moderator names in production
 
 ## Preferred Libraries
 - **PRAW**: Reddit API wrapper (already in use)
-- **SQLite3**: Database (already in use)  
+- **SQLite3**: Database (already in use)
 - **Apprise**: Future notification support
 - **Standard library**: Prefer built-in modules when possible
 
