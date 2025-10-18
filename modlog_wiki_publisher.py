@@ -1051,24 +1051,63 @@ def build_wiki_content(actions: List, config: Dict[str, Any]) -> str:
         actions_by_date[date_str].append(action)
     
     # Build content - include ID column for tracking actions across the table
+    # Reddit wiki page size limit (512 KB)
+    REDDIT_WIKI_LIMIT = 524288
+    WARNING_THRESHOLD = int(REDDIT_WIKI_LIMIT * 0.90)  # Start trimming at 90%
+
+    sorted_dates = sorted(actions_by_date.keys(), reverse=True)
     content_parts = [timestamp_header]
-    for date_str in sorted(actions_by_date.keys(), reverse=True):
-        content_parts.append(f"## {date_str}")
-        content_parts.append("| Time | Action | ID | Moderator | Content | Reason | Inquire |")
-        content_parts.append("|------|--------|----|-----------|---------|--------|---------|")
-        
+    footer_parts = ["---", "", "*This modlog is automatically maintained by [RedditModLog](https://github.com/bakerboy448/RedditModLog) bot.*"]
+
+    # Build the full content first
+    full_content_parts = []
+    for date_str in sorted_dates:
+        date_parts = [f"## {date_str}"]
+        date_parts.append("| Time | Action | ID | Moderator | Content | Reason | Inquire |")
+        date_parts.append("|------|--------|----|-----------|---------|--------|---------|")
+
         for action in sorted(actions_by_date[date_str], key=lambda x: x.created_utc, reverse=True):
             entry = format_modlog_entry(action, config)
-            content_parts.append(f"| {entry['time']} | {entry['action']} | {entry['id']} | {entry['moderator']} | {entry['content']} | {entry['reason']} | {entry['inquire']} |")
-        
-        content_parts.append("")  # Empty line between dates
-    
-    # Add bot attribution footer after all content
-    content_parts.append("---")
-    content_parts.append("")
-    content_parts.append("*This modlog is automatically maintained by [RedditModLog](https://github.com/bakerboy448/RedditModLog) bot.*")
-    
-    return "\n".join(content_parts)
+            date_parts.append(f"| {entry['time']} | {entry['action']} | {entry['id']} | {entry['moderator']} | {entry['content']} | {entry['reason']} | {entry['inquire']} |")
+
+        date_parts.append("")  # Empty line between dates
+        full_content_parts.append("\n".join(date_parts))
+
+    # Check size and trim if necessary
+    included_dates = []
+    current_size = len((timestamp_header + "\n".join(footer_parts)).encode('utf-8'))
+    skipped_days = 0
+
+    for i, date_content in enumerate(full_content_parts):
+        test_size = current_size + len(date_content.encode('utf-8'))
+
+        # If adding this date would exceed the warning threshold, stop adding dates
+        if test_size > WARNING_THRESHOLD:
+            skipped_days = len(sorted_dates) - i
+            if skipped_days > 0:
+                logger.warning(f"Wiki approaching size limit - trimming {skipped_days} oldest day(s) of entries")
+                logger.warning(f"Excluded dates: {sorted_dates[i:]}")
+
+                # Add a notice about trimmed content
+                content_parts.append(f"\n**Note:** {skipped_days} older day(s) trimmed due to wiki size limits.")
+                content_parts.append(f"Only showing entries from {sorted_dates[i-1] if i > 0 else 'today'} onwards.\n")
+            break
+
+        content_parts.append(date_content)
+        included_dates.append(sorted_dates[i])
+        current_size = test_size
+
+    # Add footer
+    content_parts.extend(footer_parts)
+
+    final_content = "\n".join(content_parts)
+    final_size = len(final_content.encode('utf-8'))
+
+    if skipped_days > 0:
+        logger.info(f"Wiki content size after trimming: {final_size:,} bytes ({(final_size/REDDIT_WIKI_LIMIT)*100:.1f}% of limit)")
+        logger.info(f"Included {len(included_dates)} days, excluded {skipped_days} days")
+
+    return final_content
 
 def setup_reddit_client(config: Dict[str, Any]):
     """Initialize Reddit API client"""
@@ -1092,9 +1131,26 @@ def setup_reddit_client(config: Dict[str, Any]):
 def update_wiki_page(reddit, subreddit_name: str, wiki_page: str, content: str, force: bool = False):
     """Update wiki page with content, using hash caching to avoid unnecessary updates"""
     try:
+        # Reddit wiki page size limit (512 KB)
+        REDDIT_WIKI_LIMIT = 524288
+
+        # Check content size
+        content_size = len(content.encode('utf-8'))
+        if content_size > REDDIT_WIKI_LIMIT:
+            logger.error(f"Wiki content size ({content_size:,} bytes) exceeds Reddit's limit ({REDDIT_WIKI_LIMIT:,} bytes)")
+            logger.error(f"Content is {content_size - REDDIT_WIKI_LIMIT:,} bytes over the limit")
+            raise ValueError(f"Wiki content too large: {content_size:,} bytes (limit: {REDDIT_WIKI_LIMIT:,} bytes)")
+
+        # Check if we're getting close to the limit (warn at 95%)
+        warning_threshold = int(REDDIT_WIKI_LIMIT * 0.95)
+        if content_size > warning_threshold:
+            percent_used = (content_size / REDDIT_WIKI_LIMIT) * 100
+            logger.warning(f"Wiki content size ({content_size:,} bytes) is {percent_used:.1f}% of Reddit's limit")
+            logger.warning(f"Only {REDDIT_WIKI_LIMIT - content_size:,} bytes remaining before hitting limit")
+
         # Calculate content hash
         content_hash = get_content_hash(content)
-        
+
         # Check if content has changed (unless forced)
         cached_hash = get_cached_wiki_hash(subreddit_name, wiki_page)
         if cached_hash == content_hash:
@@ -1103,23 +1159,91 @@ def update_wiki_page(reddit, subreddit_name: str, wiki_page: str, content: str, 
             else:
                 logger.info(f"Wiki content unchanged for /r/{subreddit_name}/wiki/{wiki_page}, skipping update")
                 return False
-        
-        # Update the wiki page
+
+        # Check existing wiki page size if it exists
         subreddit = reddit.subreddit(subreddit_name)
+        try:
+            existing_wiki = subreddit.wiki[wiki_page]
+            existing_size = len(existing_wiki.content_md.encode('utf-8'))
+            logger.debug(f"Existing wiki page size: {existing_size:,} bytes")
+
+            # If new content would make page exceed limit, we need to handle it
+            if existing_size > warning_threshold:
+                logger.warning(f"Existing wiki page already at {existing_size:,} bytes ({(existing_size/REDDIT_WIKI_LIMIT)*100:.1f}% of limit)")
+
+                # If we're trying to add more content to an already large page
+                if content_size >= existing_size:
+                    logger.error(f"Cannot increase wiki size from {existing_size:,} to {content_size:,} bytes - too close to limit")
+                    logger.error("Consider reducing retention_days or max_wiki_entries_per_page in config")
+                    raise ValueError(f"Wiki page too large to update safely")
+        except Exception as e:
+            # Wiki page might not exist yet, that's okay
+            if "404" not in str(e) and "not found" not in str(e).lower():
+                logger.debug(f"Could not check existing wiki size: {e}")
+
+        # Update the wiki page
+        logger.info(f"Attempting to update wiki page with {content_size:,} bytes of content")
         subreddit.wiki[wiki_page].edit(
             content=content,
             reason="Automated modlog update"
         )
-        
+
         # Update the cached hash
         update_cached_wiki_hash(subreddit_name, wiki_page, content_hash)
-        
+
         action_type = "force updated" if force else "updated"
         logger.info(f"Successfully {action_type} wiki page: /r/{subreddit_name}/wiki/{wiki_page}")
+        logger.info(f"Final wiki size: {content_size:,} bytes ({(content_size/REDDIT_WIKI_LIMIT)*100:.1f}% of Reddit's limit)")
         return True
-        
+
+    except praw.exceptions.RedditAPIException as e:
+        # Handle specific Reddit API errors
+        error_messages = []
+        for item in e.items:
+            error_messages.append(f"{item.error_type}: {item.message}")
+
+        logger.error(f"Reddit API error updating wiki page: {', '.join(error_messages)}")
+
+        # Check if it's a size-related error
+        if any('too long' in msg.lower() or 'size' in msg.lower() for msg in error_messages):
+            logger.error(f"Wiki content size ({content_size:,} bytes) likely exceeds Reddit's limit")
+            logger.error("Try reducing retention_days or max_wiki_entries_per_page in config")
+
+        raise
+
     except Exception as e:
-        logger.error(f"Failed to update wiki page: {e}")
+        error_str = str(e)
+
+        # Provide more context for common errors
+        if "403" in error_str:
+            logger.error(f"403 Forbidden error updating wiki page /r/{subreddit_name}/wiki/{wiki_page}")
+            logger.error("Possible causes:")
+            logger.error("  1. Wiki page size limit exceeded (current content: {content_size:,} bytes)")
+            logger.error("  2. Bot lacks wiki edit permissions on this subreddit")
+            logger.error("  3. Wiki page is locked or restricted")
+            logger.error("  4. Rate limiting (too many requests)")
+
+            # Check if we're near the size limit
+            if content_size > REDDIT_WIKI_LIMIT * 0.95:
+                logger.error(f"LIKELY CAUSE: Content size ({content_size:,} bytes) is very close to Reddit's limit ({REDDIT_WIKI_LIMIT:,} bytes)")
+
+            # Try to check existing page size for context
+            try:
+                existing_wiki = subreddit.wiki[wiki_page]
+                existing_size = len(existing_wiki.content_md.encode('utf-8'))
+                logger.error(f"Current wiki page size: {existing_size:,} bytes")
+                if existing_size > REDDIT_WIKI_LIMIT * 0.95:
+                    logger.error("Wiki page is already near Reddit's size limit!")
+            except:
+                pass
+
+        elif "404" in error_str:
+            logger.error(f"Wiki page /r/{subreddit_name}/wiki/{wiki_page} not found")
+            logger.error("The wiki page might not exist yet or the name is incorrect")
+
+        else:
+            logger.error(f"Failed to update wiki page: {e}")
+
         raise
 
 def process_modlog_actions(reddit, config: Dict[str, Any]) -> List:
