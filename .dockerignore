@@ -1,0 +1,56 @@
+# Git files
+.git
+.gitignore
+.github
+
+# Documentation
+README.md
+CLAUDE.md
+LICENSE
+CHANGELOG.md
+*.md
+
+# Development files
+*.pyc
+__pycache__
+.pytest_cache
+.coverage
+htmlcov
+.env
+.env.*
+
+# IDE files
+.vscode
+.idea
+*.swp
+*.swo
+*.swn
+.DS_Store
+
+# Local data and logs
+data/
+logs/
+*.db
+*.log
+
+# Config files (except template)
+config.json
+
+# Test files
+test_*.py
+tests/
+debug_*.py
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Systemd files
+systemd/
+*.service
+
+# Docker files (not needed in build context)
+docker-compose.yml
+docker-compose.*.yml
+Dockerfile.*

@@ -2,6 +2,9 @@
 config.json
 *.config.json
 config.*.json
+/etc/redditmodlog/*.json
+!config_template.json
+!*.json.example
 
 # Database files
 *.db
@@ -38,7 +41,13 @@ venv/
 ENV/
 env/
 .venv
+
+# Environment files with credentials
 .env
+.env.*
+*.env
+!example.env
+!*.env.example
 
 # IDE
 .vscode/

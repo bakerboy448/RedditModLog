@@ -1,0 +1,76 @@
+version: '3.8'
+
+services:
+  modlog-bot:
+    build: .
+    image: ghcr.io/bakerboy448/redditmodlog:latest
+    container_name: reddit-modlog-bot
+    restart: unless-stopped
+    environment:
+      # User/Group IDs for file permissions
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+
+      # Reddit API credentials - REQUIRED
+      - REDDIT_CLIENT_ID=${REDDIT_CLIENT_ID}
+      - REDDIT_CLIENT_SECRET=${REDDIT_CLIENT_SECRET}
+      - REDDIT_USERNAME=${REDDIT_USERNAME}
+      - REDDIT_PASSWORD=${REDDIT_PASSWORD}
+
+      # Application settings
+      - SOURCE_SUBREDDIT=${SOURCE_SUBREDDIT}
+      - WIKI_PAGE=${WIKI_PAGE:-modlog}
+      - RETENTION_DAYS=${RETENTION_DAYS:-30}
+      - BATCH_SIZE=${BATCH_SIZE:-100}
+      - UPDATE_INTERVAL=${UPDATE_INTERVAL:-300}
+      - ANONYMIZE_MODERATORS=${ANONYMIZE_MODERATORS:-true}
+
+      # Advanced settings (optional)
+      - WIKI_ACTIONS=${WIKI_ACTIONS:-removelink,removecomment,addremovalreason,spamlink,spamcomment,approvelink,approvecomment}
+      - IGNORED_MODERATORS=${IGNORED_MODERATORS:-}
+      - MAX_WIKI_ENTRIES_PER_PAGE=${MAX_WIKI_ENTRIES_PER_PAGE:-1000}
+      - MAX_CONTINUOUS_ERRORS=${MAX_CONTINUOUS_ERRORS:-5}
+
+    volumes:
+      # Persistent data storage
+      - ./data:/app/data
+      - ./logs:/app/logs
+
+      # Optional: Mount config file instead of using env vars
+      # - ./config.json:/app/config.json:ro
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+
+  # Optional: Multiple bot instances for different subreddits
+  # modlog-bot-2:
+  #   extends: modlog-bot
+  #   container_name: reddit-modlog-bot-2
+  #   environment:
+  #     - REDDIT_CLIENT_ID=${REDDIT_CLIENT_ID_2}
+  #     - REDDIT_CLIENT_SECRET=${REDDIT_CLIENT_SECRET_2}
+  #     - REDDIT_USERNAME=${REDDIT_USERNAME_2}
+  #     - REDDIT_PASSWORD=${REDDIT_PASSWORD_2}
+  #     - SOURCE_SUBREDDIT=${SOURCE_SUBREDDIT_2}
+  #   volumes:
+  #     - ./data2:/app/data
+  #     - ./logs2:/app/logs
+
+# Optional: External network for reverse proxy integration
+# networks:
+#   default:
+#     external:
+#       name: proxy-network
