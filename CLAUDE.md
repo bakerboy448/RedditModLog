@@ -82,6 +82,8 @@ All configuration options can be set via environment variables:
 - `BATCH_SIZE`: Entries fetched per run
 - `UPDATE_INTERVAL`: Seconds between updates in daemon mode
 - `ANONYMIZE_MODERATORS`: **MUST be `true`** (enforced for security)
+- `DATABASE_PATH`: Path to SQLite database file (default: "modlog.db")
+- `LOGS_DIR`: Directory for log files (default: "logs")
 
 #### Advanced Settings
 - `WIKI_ACTIONS`: Comma-separated list of actions to show (e.g., "removelink,removecomment,approvelink")
