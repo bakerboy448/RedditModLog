@@ -1,0 +1,50 @@
+[Unit]
+Description=Reddit ModLog Wiki Publisher for /r/%i
+Documentation=https://github.com/bakerboy448/RedditModLog
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=modlogbot
+Group=modlogbot
+WorkingDirectory=/opt/RedditModLog
+
+# Environment file for credentials (optional)
+EnvironmentFile=-/etc/redditmodlog/%i.env
+
+# Use config file specific to this subreddit
+ExecStart=/opt/.venv/redditbot/bin/python /opt/RedditModLog/modlog_wiki_publisher.py \
+    --config /etc/redditmodlog/%i.json \
+    --continuous
+
+# Restart policy
+Restart=always
+RestartSec=30
+StartLimitInterval=600
+StartLimitBurst=3
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/RedditModLog/data /var/log/redditmodlog
+
+# Resource limits
+MemoryMax=256M
+CPUQuota=25%
+IOWeight=50
+
+# Logging configuration
+StandardOutput=append:/var/log/redditmodlog/%i.log
+StandardError=append:/var/log/redditmodlog/%i.log
+SyslogIdentifier=modlog-%i
+
+# Process management
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

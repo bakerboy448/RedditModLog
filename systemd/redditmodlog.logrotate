@@ -1,0 +1,35 @@
+/var/log/redditmodlog/*.log {
+    # Rotate daily
+    daily
+
+    # Keep 30 days of logs
+    rotate 30
+
+    # Compress old logs
+    compress
+    delaycompress
+
+    # Don't error if log file is missing
+    missingok
+
+    # Don't rotate if empty
+    notifempty
+
+    # Create new log files with proper permissions
+    create 0644 modlogbot modlogbot
+
+    # Size limit - rotate if log exceeds 100MB
+    maxsize 100M
+
+    # Copy then truncate (better for services writing to logs)
+    copytruncate
+
+    # Run scripts once for all logs
+    sharedscripts
+
+    # Post-rotation script
+    postrotate
+        # Signal systemd to reopen log files
+        systemctl reload-or-restart 'modlog-*.service' 2>/dev/null || true
+    endscript
+}

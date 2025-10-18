@@ -17,8 +17,8 @@ from typing import Dict, List, Optional, Any
 
 import praw
 
-DB_PATH = "modlog.db"
-LOGS_DIR = "logs"
+DB_PATH = os.getenv('DATABASE_PATH', "modlog.db")
+LOGS_DIR = os.getenv('LOGS_DIR', "logs")
 BASE_BACKOFF_WAIT = 30
 MAX_BACKOFF_WAIT = 300
 logger = logging.getLogger(__name__)
