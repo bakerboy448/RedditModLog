@@ -216,28 +216,104 @@ The database includes comprehensive moderation data with full transparency:
 - **`subreddit` column**: Multi-subreddit support with proper data separation
 - **Unique content IDs**: Comments show comment IDs (e.g., n7ravg2), posts show post IDs
 
-## Systemd Service (Optional)
+## Docker Deployment
 
-```ini
-[Unit]
-Description=Reddit Modlog Wiki Publisher
-After=network.target
-
-[Service]
-Type=simple
-User=YOUR_USER
-WorkingDirectory=/opt/RedditModLog
-ExecStart=/usr/bin/python3 modlog_wiki_publisher.py --source-subreddit yoursubreddit --continuous
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-```
+### Quick Start with Docker
 
 ```bash
-sudo systemctl enable modlog-wiki
-sudo systemctl start modlog-wiki
+# Using Docker Compose (recommended)
+docker-compose up -d
+
+# Using Docker directly
+docker run -d \
+  --name reddit-modlog \
+  -e REDDIT_CLIENT_ID=your_client_id \
+  -e REDDIT_CLIENT_SECRET=your_client_secret \
+  -e REDDIT_USERNAME=your_username \
+  -e REDDIT_PASSWORD=your_password \
+  -e SOURCE_SUBREDDIT=yoursubreddit \
+  -e PUID=1000 \
+  -e PGID=1000 \
+  -v ./data:/app/data \
+  -v ./logs:/app/logs \
+  ghcr.io/bakerboy448/redditmodlog:latest
 ```
+
+### Docker Environment Variables
+
+```env
+# User/Group IDs for file permissions
+PUID=1000
+PGID=1000
+
+# Reddit API credentials (REQUIRED)
+REDDIT_CLIENT_ID=your_client_id
+REDDIT_CLIENT_SECRET=your_client_secret
+REDDIT_USERNAME=your_bot_username
+REDDIT_PASSWORD=your_bot_password
+
+# Application settings
+SOURCE_SUBREDDIT=yoursubreddit
+WIKI_PAGE=modlog
+RETENTION_DAYS=30
+BATCH_SIZE=100
+UPDATE_INTERVAL=300
+ANONYMIZE_MODERATORS=true
+```
+
+### Docker Image
+
+Pre-built images available at:
+- `ghcr.io/bakerboy448/redditmodlog:latest`
+- Multi-architecture: `linux/amd64`, `linux/arm64`
+
+## Systemd Service (Production)
+
+### Installation
+
+```bash
+# Run the installation script
+cd systemd
+sudo ./install.sh
+
+# Copy and edit configs for your subreddits
+sudo cp /etc/redditmodlog/opensignups.json.example /etc/redditmodlog/opensignups.json
+sudo nano /etc/redditmodlog/opensignups.json
+
+# Start services
+sudo systemctl start modlog@opensignups
+sudo systemctl enable modlog@opensignups
+
+# Check logs
+tail -f /var/log/redditmodlog/opensignups.log
+```
+
+### Service Template
+
+The systemd template (`modlog@.service`) supports multiple instances:
+
+```bash
+# Start multiple subreddit services
+sudo systemctl start modlog@subreddit1
+sudo systemctl start modlog@subreddit2
+
+# Each service uses its own config file
+# /etc/redditmodlog/subreddit1.json
+# /etc/redditmodlog/subreddit2.json
+
+# Logs go to separate files
+# /var/log/redditmodlog/subreddit1.log
+# /var/log/redditmodlog/subreddit2.log
+```
+
+### Features
+
+- ✅ Per-subreddit configuration files
+- ✅ Automatic log rotation (30 days retention, 100MB max size)
+- ✅ Security hardening (read-only filesystem, private /tmp)
+- ✅ Resource limits (256MB RAM, 25% CPU)
+- ✅ Automatic restart on failure
+- ✅ Proper user/group management
 
 ## Permissions Required
 
