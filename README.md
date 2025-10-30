@@ -18,7 +18,15 @@ Automatically publishes Reddit moderation logs to a subreddit wiki page with mod
 * 🆔 **Unique content IDs** - comments show comment IDs, posts show post IDs for precise tracking
 * ✅ **Multi-subreddit database support** - single database handles multiple subreddits safely
 
-## Quick Start
+## Deployment Options
+
+Choose your preferred deployment method:
+
+- **🐳 Docker** (Recommended) - Containerized deployment with s6-overlay init system. See [Docker Deployment](#docker-deployment)
+- **⚙️ Systemd** (Production) - Native Linux service with automatic restart and log rotation. See [Systemd Service](#systemd-service-production)
+- **🐍 Python Native** (Development/Testing) - Direct Python execution. See [Quick Start](#quick-start) below
+
+## Quick Start (Python Native)
 
 1. **Install dependencies**
 
