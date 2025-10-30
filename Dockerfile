@@ -44,7 +44,7 @@ RUN tar -C / -Jxpf /tmp/s6-overlay-noarch.tar.xz && \
 
 # Create default user and group
 RUN groupadd -g 1000 modlogbot && \
-    useradd -u 1000 -g modlogbot -d /app -s /bin/bash modlogbot
+    useradd -u 1000 -g modlogbot -d /config -s /bin/bash modlogbot
 
 # Copy virtual environment from builder
 COPY --from=builder /opt/venv /opt/venv
@@ -56,15 +56,36 @@ ENV PATH="/opt/venv/bin:$PATH" \
     PUID=1000 \
     PGID=1000 \
     S6_CMD_WAIT_FOR_SERVICES_MAXTIME=0 \
-    DATABASE_PATH=/app/data/modlog.db \
-    LOGS_DIR=/app/logs
+    DATABASE_PATH=/config/data/modlog.db \
+    LOGS_DIR=/config/logs
 
 # Create application directories
-RUN mkdir -p /app /app/data /app/logs /etc/s6-overlay/s6-rc.d/modlog-bot /etc/s6-overlay/s6-rc.d/init-modlogbot /etc/s6-overlay/scripts
+RUN mkdir -p /config /config/data /config/logs /app /etc/s6-overlay/s6-rc.d/modlog-bot /etc/s6-overlay/s6-rc.d/init-modlogbot /etc/s6-overlay/scripts
 
 # Create s6 init script for user/group management
 RUN echo '#!/command/with-contenv bash\n\
 set -e\n\
+\n\
+# Validate critical environment variables\n\
+echo "Validating required environment variables..."\n\
+\n\
+missing_vars=()\n\
+\n\
+[ -z "$REDDIT_CLIENT_ID" ] && missing_vars+=("REDDIT_CLIENT_ID")\n\
+[ -z "$REDDIT_CLIENT_SECRET" ] && missing_vars+=("REDDIT_CLIENT_SECRET")\n\
+[ -z "$REDDIT_USERNAME" ] && missing_vars+=("REDDIT_USERNAME")\n\
+[ -z "$REDDIT_PASSWORD" ] && missing_vars+=("REDDIT_PASSWORD")\n\
+[ -z "$SOURCE_SUBREDDIT" ] && missing_vars+=("SOURCE_SUBREDDIT")\n\
+\n\
+if [ ${#missing_vars[@]} -ne 0 ]; then\n\
+    echo "ERROR: Missing required environment variables:" >&2\n\
+    printf "  - %s\n" "${missing_vars[@]}" >&2\n\
+    echo "" >&2\n\
+    echo "Please set all required environment variables and restart the container." >&2\n\
+    exit 1\n\
+fi\n\
+\n\
+echo "All required environment variables are set."\n\
 \n\
 PUID=${PUID:-1000}\n\
 PGID=${PGID:-1000}\n\
@@ -76,14 +97,14 @@ groupmod -o -g "$PGID" modlogbot\n\
 usermod -o -u "$PUID" modlogbot\n\
 \n\
 # Fix ownership\n\
-echo "Fixing ownership of /app"\n\
-chown -R modlogbot:modlogbot /app\n\
+echo "Fixing ownership of /config and /app"\n\
+chown -R modlogbot:modlogbot /config /app\n\
 \n\
 # Ensure data directory has correct permissions\n\
-if [ ! -f /app/data/modlog.db ]; then\n\
+if [ ! -f /config/data/modlog.db ]; then\n\
     echo "Initializing database directory"\n\
-    touch /app/data/modlog.db\n\
-    chown modlogbot:modlogbot /app/data/modlog.db\n\
+    touch /config/data/modlog.db\n\
+    chown modlogbot:modlogbot /config/data/modlog.db\n\
 fi' > /etc/s6-overlay/scripts/init-modlogbot-run && \
     chmod +x /etc/s6-overlay/scripts/init-modlogbot-run
 
@@ -111,7 +132,7 @@ COPY --chown=modlogbot:modlogbot config_template.json /app/
 
 # Health check
 HEALTHCHECK --interval=5m --timeout=10s --start-period=30s --retries=3 \
-    CMD python -c "import os, sys; sys.exit(0 if os.path.exists('/app/data/modlog.db') else 1)"
+    CMD python -c "import os, sys; sys.exit(0 if os.path.exists(os.getenv('DATABASE_PATH', '/config/data/modlog.db')) else 1)"
 
 # Use s6-overlay as entrypoint
 ENTRYPOINT ["/init"]
