@@ -11,6 +11,7 @@ config.*.json
 *.db-journal
 *.sqlite
 *.sqlite3
+data/
 
 # Python
 __pycache__/
