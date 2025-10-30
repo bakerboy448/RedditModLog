@@ -37,7 +37,10 @@ repos:
         exclude: |
           (?x)^(
               config_template\.json|
-              \.secrets\.baseline
+              \.secrets\.baseline|
+              systemd/.*|
+              README\.md|
+              CLAUDE\.md
           )$
 
   - repo: https://github.com/pre-commit/mirrors-mypy
