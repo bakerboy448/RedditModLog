@@ -8,7 +8,7 @@
   "labels": ["dependencies"],
   "assigneesFromCodeOwners": true,
   "reviewersFromCodeOwners": true,
-  
+
   "packageRules": [
     {
       "description": "Python dependencies - group minor and patch updates",
@@ -48,14 +48,14 @@
 
   "prConcurrentLimit": 3,
   "prHourlyLimit": 2,
-  
+
   "commitMessageTopic": "{{depName}}",
   "commitMessageAction": "update",
   "commitMessageExtra": "to {{#if isPinDigest}}{{{newDigestShort}}}{{else}}{{#if isMajor}}{{prettyNewMajor}}{{else}}{{#if isSingleVersion}}{{prettyNewVersion}}{{else}}{{#if newValue}}{{{newValue}}}{{else}}{{{newDigestShort}}}{{/if}}{{/if}}{{/if}}{{/if}}",
-  
+
   "prTitle": "{{#if isPin}}Pin{{else}}Update{{/if}} {{depName}} {{#if isMajor}}(major){{else}}{{#if isMinor}}(minor){{else}}{{#if isPatch}}(patch){{/if}}{{/if}}{{/if}}",
   "prBodyTemplate": "{{{header}}}{{{table}}}{{{notes}}}{{{changelogs}}}{{{configDescription}}}{{{controls}}}{{{footer}}}",
-  
+
   "enabledManagers": [
     "dockerfile",
     "docker-compose",

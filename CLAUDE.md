@@ -51,7 +51,7 @@ sqlite3 modlog.db "SELECT action_id, action_type, moderator, removal_reason, sub
 # View actions by subreddit
 sqlite3 modlog.db "SELECT action_type, moderator, target_author, removal_reason FROM processed_actions WHERE subreddit = 'usenet' ORDER BY created_at DESC LIMIT 5;"
 
-# Track content lifecycle by target ID  
+# Track content lifecycle by target ID
 sqlite3 modlog.db "SELECT target_id, action_type, moderator, removal_reason, datetime(created_at, 'unixepoch') FROM processed_actions WHERE target_id LIKE '%1mkz4jm%' ORDER BY created_at;"
 
 # Manual cleanup of old entries
@@ -62,7 +62,7 @@ sqlite3 modlog.db "DELETE FROM processed_actions WHERE created_at < date('now', 
 
 The application supports multiple configuration methods with the following priority (highest to lowest):
 1. **Command line arguments** (highest priority)
-2. **Environment variables** (override config file)  
+2. **Environment variables** (override config file)
 3. **JSON config file** (base configuration)
 
 ### Environment Variables
@@ -71,7 +71,7 @@ All configuration options can be set via environment variables:
 
 #### Reddit Credentials
 - `REDDIT_CLIENT_ID`: Reddit app client ID
-- `REDDIT_CLIENT_SECRET`: Reddit app client secret  
+- `REDDIT_CLIENT_SECRET`: Reddit app client secret
 - `REDDIT_USERNAME`: Reddit bot username
 - `REDDIT_PASSWORD`: Reddit bot password
 
@@ -132,7 +132,7 @@ python modlog_wiki_publisher.py --debug --batch-size 25  # CLI takes priority
 
 ### Display Options
 - `anonymize_moderators`: **REQUIRED** to be `true` for security (default: true)
-  - `true` (ENFORCED): Shows "AutoModerator", "Reddit", or "HumanModerator"  
+  - `true` (ENFORCED): Shows "AutoModerator", "Reddit", or "HumanModerator"
   - `false`: **BLOCKED** - Would expose moderator identities publicly
 
 **SECURITY NOTE**: Setting `anonymize_moderators=false` is permanently disabled to protect moderator privacy. The application will refuse to start if this is attempted.
@@ -143,7 +143,7 @@ The application uses configurable action type variables for flexibility:
 
 #### Default Configuration
 - **REMOVAL_ACTIONS**: `removelink`, `removecomment`, `spamlink`, `spamcomment`
-- **APPROVAL_ACTIONS**: `approvelink`, `approvecomment` 
+- **APPROVAL_ACTIONS**: `approvelink`, `approvecomment`
 - **REASON_ACTIONS**: `addremovalreason`
 - **DEFAULT_WIKI_ACTIONS**: All above combined
 
@@ -184,7 +184,7 @@ Use `--test` flag to verify configuration and Reddit API connectivity without ma
 ## Content Link Guidelines
 
 **CRITICAL**: Content links in the modlog should NEVER point to user profiles (`/u/username`). Links should only point to:
-- Actual removed posts (`/comments/postid/`)  
+- Actual removed posts (`/comments/postid/`)
 - Actual removed comments (`/comments/postid/_/commentid/`)
 - No link at all if no actual content is available
 
@@ -231,14 +231,14 @@ User profile links are a privacy concern and not useful for modlog purposes.
 
 ### Content Linking and Display
 - ✅ Content links point to actual Reddit posts/comments, never user profiles for privacy
-- ✅ Fixed target authors showing as [deleted] - now displays actual usernames  
+- ✅ Fixed target authors showing as [deleted] - now displays actual usernames
 - ✅ Proper content titles extracted from Reddit API data
 - ✅ AutoModerator displays as "AutoModerator" (not anonymized)
 - ✅ Configurable anonymization for human moderators
 
 ### Data Integrity
 - ✅ Pipe character escaping for markdown table compatibility
-- ✅ Robust error handling for mixed subreddit scenarios  
+- ✅ Robust error handling for mixed subreddit scenarios
 - ✅ Database schema at version 5 with all required columns
 - ✅ Consistent Reddit API field usage (action.details vs action.description)
 
