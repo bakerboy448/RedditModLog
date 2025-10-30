@@ -1065,7 +1065,7 @@ def build_wiki_content(actions: List, config: Dict[str, Any]) -> str:
     actions = filtered_actions
 
     combined_actions = []
-    actions_by_target = {}
+    actions_by_target: Dict[str, List[Any]] = {}
 
     for action in actions:
         content_id = extract_content_id_from_permalink(get_target_permalink(action))
@@ -1121,7 +1121,7 @@ def build_wiki_content(actions: List, config: Dict[str, Any]) -> str:
         actions = actions[:max_entries]
 
     # Group actions by date
-    actions_by_date = {}
+    actions_by_date: Dict[str, List[Any]] = {}
     for action in actions:
         date_str = get_action_datetime(action).strftime("%Y-%m-%d")
         if date_str not in actions_by_date:
@@ -1371,10 +1371,10 @@ def process_modlog_actions(reddit, config: Dict[str, Any]) -> List:
 
 def load_env_config() -> Dict[str, Any]:
     """Load configuration from environment variables"""
-    env_config = {}
+    env_config: Dict[str, Any] = {}
 
     # Reddit credentials
-    reddit_config = {}
+    reddit_config: Dict[str, Any] = {}
     if os.getenv("REDDIT_CLIENT_ID"):
         reddit_config["client_id"] = os.getenv("REDDIT_CLIENT_ID")
     if os.getenv("REDDIT_CLIENT_SECRET"):
@@ -1388,31 +1388,39 @@ def load_env_config() -> Dict[str, Any]:
         env_config["reddit"] = reddit_config
 
     # Application settings
-    if os.getenv("SOURCE_SUBREDDIT"):
-        env_config["source_subreddit"] = os.getenv("SOURCE_SUBREDDIT")
-    if os.getenv("WIKI_PAGE"):
-        env_config["wiki_page"] = os.getenv("WIKI_PAGE")
-    if os.getenv("RETENTION_DAYS"):
-        env_config["retention_days"] = int(os.getenv("RETENTION_DAYS"))
-    if os.getenv("BATCH_SIZE"):
-        env_config["batch_size"] = int(os.getenv("BATCH_SIZE"))
-    if os.getenv("UPDATE_INTERVAL"):
-        env_config["update_interval"] = int(os.getenv("UPDATE_INTERVAL"))
-    if os.getenv("ANONYMIZE_MODERATORS"):
-        env_config["anonymize_moderators"] = os.getenv("ANONYMIZE_MODERATORS").lower() == "true"
+    source_subreddit = os.getenv("SOURCE_SUBREDDIT")
+    if source_subreddit:
+        env_config["source_subreddit"] = source_subreddit
+    wiki_page = os.getenv("WIKI_PAGE")
+    if wiki_page:
+        env_config["wiki_page"] = wiki_page
+    retention_days = os.getenv("RETENTION_DAYS")
+    if retention_days:
+        env_config["retention_days"] = int(retention_days)
+    batch_size = os.getenv("BATCH_SIZE")
+    if batch_size:
+        env_config["batch_size"] = int(batch_size)
+    update_interval = os.getenv("UPDATE_INTERVAL")
+    if update_interval:
+        env_config["update_interval"] = int(update_interval)
+    anonymize_moderators = os.getenv("ANONYMIZE_MODERATORS")
+    if anonymize_moderators:
+        env_config["anonymize_moderators"] = anonymize_moderators.lower() == "true"
 
     # Wiki actions (comma-separated list)
-    if os.getenv("WIKI_ACTIONS"):
+    wiki_actions = os.getenv("WIKI_ACTIONS")
+    if wiki_actions:
         try:
-            raw_actions = [action.strip() for action in os.getenv("WIKI_ACTIONS").split(",")]
+            raw_actions = [action.strip() for action in wiki_actions.split(",")]
             env_config["wiki_actions"] = validate_wiki_actions(raw_actions)
         except ValueError as e:
             logger.error(f"WIKI_ACTIONS environment variable invalid: {e}")
             raise
 
     # Ignored moderators (comma-separated list)
-    if os.getenv("IGNORED_MODERATORS"):
-        env_config["ignored_moderators"] = [mod.strip() for mod in os.getenv("IGNORED_MODERATORS").split(",")]
+    ignored_moderators = os.getenv("IGNORED_MODERATORS")
+    if ignored_moderators:
+        env_config["ignored_moderators"] = [mod.strip() for mod in ignored_moderators.split(",")]
 
     return env_config
 
