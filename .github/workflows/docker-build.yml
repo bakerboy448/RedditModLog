@@ -24,7 +24,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: bakerboy448/redditmodlog
 
 jobs:
   build:
@@ -61,7 +61,7 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
             type=raw,value=latest,enable={{is_default_branch}}
-            type=sha,prefix={{branch}}-,enable=true,format=short
+            type=sha
           labels: |
             org.opencontainers.image.title=Reddit ModLog Wiki Publisher
             org.opencontainers.image.description=Automated Reddit moderation log publisher to wiki pages

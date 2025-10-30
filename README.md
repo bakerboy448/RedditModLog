@@ -242,8 +242,8 @@ docker run -d \
   -e SOURCE_SUBREDDIT=yoursubreddit \
   -e PUID=1000 \
   -e PGID=1000 \
-  -v ./data:/app/data \
-  -v ./logs:/app/logs \
+  -v ./data:/config/data \
+  -v ./logs:/config/logs \
   ghcr.io/bakerboy448/redditmodlog:latest
 ```
 
