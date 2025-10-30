@@ -9,7 +9,7 @@ Automatically publishes Reddit moderation logs to a subreddit wiki page with mod
 * 🗄️ SQLite database for deduplication and retention with **multi-subreddit support**
 * ⏰ Configurable update intervals with continuous daemon mode
 * 🔒 Automatic cleanup of old entries with configurable retention
-* ⚡ Handles Reddit's 524KB wiki size limit automatically  
+* ⚡ Handles Reddit's 524KB wiki size limit automatically
 * 🧩 Fully CLI-configurable (no need to edit `config.json`)
 * 📁 Per-subreddit log files for debugging and monitoring
 * 🔒 Configurable moderator anonymization (AutoModerator/HumanModerator)
@@ -162,7 +162,7 @@ Options:
 ### Force Commands Explained
 
 **--force-modlog**: Complete rebuild from Reddit
-- Fetches ALL recent modlog actions from Reddit API 
+- Fetches ALL recent modlog actions from Reddit API
 - Stores them in database
 - Rebuilds entire wiki page from database
 - Use when: Starting fresh, major updates, or troubleshooting
@@ -181,7 +181,7 @@ Options:
 # Complete rebuild from Reddit API
 python modlog_wiki_publisher.py --source-subreddit usenet --force-modlog
 
-# Update wiki with current database data (bypass cache)  
+# Update wiki with current database data (bypass cache)
 python modlog_wiki_publisher.py --source-subreddit usenet --force-wiki
 
 # Do both (equivalent to old --force)
