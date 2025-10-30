@@ -40,7 +40,7 @@ cp config_template.json config.json
 /opt/.venv/redditbot/bin/python modlog_wiki_publisher.py --source-subreddit SUBREDDIT_NAME --force-wiki
 
 # Debug authentication issues
-/opt/.venv/redditbot/bin/python debug_auth.py
+/opt/.venv/redditbot/bin/python scripts/debug_auth.py
 ```
 
 ### Database Operations
@@ -171,9 +171,10 @@ The bot account needs:
 ## File Structure
 
 - `modlog_wiki_publisher.py`: Main application
-- `debug_auth.py`: Authentication debugging utility
+- `scripts/debug_auth.py`: Authentication debugging utility
+- `tests/test_removal_reasons.py`: Test suite for removal reason processing
 - `config.json`: Runtime configuration (created from template)
-- `modlog.db`: SQLite database for processed actions
+- `data/`: Runtime data directory (database files)
 - `logs/`: Per-subreddit log files
 - `requirements.txt`: Python dependencies
 
