@@ -267,7 +267,14 @@ def migrate_database():
             cursor.execute("PRAGMA table_info(processed_actions)")
             existing_columns = [row[1] for row in cursor.fetchall()]
 
-            columns_to_add = [("action_type", "TEXT"), ("moderator", "TEXT"), ("target_id", "TEXT"), ("target_type", "TEXT"), ("display_id", "TEXT"), ("target_permalink", "TEXT")]
+            columns_to_add = [
+                ("action_type", "TEXT"),
+                ("moderator", "TEXT"),
+                ("target_id", "TEXT"),
+                ("target_type", "TEXT"),
+                ("display_id", "TEXT"),
+                ("target_permalink", "TEXT"),
+            ]
 
             for column_name, column_type in columns_to_add:
                 if column_name not in existing_columns:
@@ -503,7 +510,8 @@ def generate_display_id(action):
     target_id = extract_target_id(action)
     target_type = get_target_type(action)
 
-    prefixes = {"post": "P", "comment": "C", "user": "U", "action": "A"}  # Use 'A' for action ID when dealing with user actions
+    # Prefix mapping: P=post, C=comment, U=user, A=action
+    prefixes = {"post": "P", "comment": "C", "user": "U", "action": "A"}
 
     prefix = prefixes.get(target_type, "ZZU")
 

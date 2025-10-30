@@ -6,7 +6,7 @@ Creates a local markdown file to demonstrate the functionality
 import os
 import sqlite3
 import sys
-from datetime import datetime, timezone
+from datetime import datetime
 
 # Add the current directory to path to import our module
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
