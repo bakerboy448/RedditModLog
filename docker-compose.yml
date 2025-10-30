@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   modlog-bot:
     build: .
@@ -28,8 +26,9 @@ services:
       # Advanced settings (optional)
       - WIKI_ACTIONS=${WIKI_ACTIONS:-removelink,removecomment,addremovalreason,spamlink,spamcomment,approvelink,approvecomment}
       - IGNORED_MODERATORS=${IGNORED_MODERATORS:-}
-      - MAX_WIKI_ENTRIES_PER_PAGE=${MAX_WIKI_ENTRIES_PER_PAGE:-1000}
-      - MAX_CONTINUOUS_ERRORS=${MAX_CONTINUOUS_ERRORS:-5}
+
+      # Note: MAX_WIKI_ENTRIES_PER_PAGE and MAX_CONTINUOUS_ERRORS require config.json mount
+      # These settings are not supported via environment variables
 
     volumes:
       # Persistent data storage
@@ -45,15 +44,10 @@ services:
         max-size: "10m"
         max-file: "5"
 
-    # Resource limits
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 256M
-        reservations:
-          cpus: '0.1'
-          memory: 128M
+    # Resource limits (Compose v2 syntax)
+    mem_limit: 256m
+    mem_reservation: 128m
+    cpus: 0.5
 
   # Optional: Multiple bot instances for different subreddits
   # modlog-bot-2:
@@ -68,9 +62,3 @@ services:
   #   volumes:
   #     - ./data2:/config/data
   #     - ./logs2:/config/logs
-
-# Optional: External network for reverse proxy integration
-# networks:
-#   default:
-#     external:
-#       name: proxy-network

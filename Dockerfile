@@ -36,10 +36,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install s6-overlay for proper init and user management
 ARG S6_OVERLAY_VERSION=3.1.6.2
+ARG TARGETARCH
 ADD https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-noarch.tar.xz /tmp
-ADD https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-x86_64.tar.xz /tmp
-RUN tar -C / -Jxpf /tmp/s6-overlay-noarch.tar.xz && \
-    tar -C / -Jxpf /tmp/s6-overlay-x86_64.tar.xz && \
+RUN case ${TARGETARCH} in \
+        "amd64") S6_ARCH=x86_64 ;; \
+        "arm64") S6_ARCH=aarch64 ;; \
+        "arm/v7") S6_ARCH=arm ;; \
+        *) echo "Unsupported architecture: ${TARGETARCH}" && exit 1 ;; \
+    esac && \
+    curl -L "https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-${S6_ARCH}.tar.xz" -o /tmp/s6-overlay-arch.tar.xz && \
+    tar -C / -Jxpf /tmp/s6-overlay-noarch.tar.xz && \
+    tar -C / -Jxpf /tmp/s6-overlay-arch.tar.xz && \
     rm /tmp/s6-overlay-*.tar.xz
 
 # Create default user and group
