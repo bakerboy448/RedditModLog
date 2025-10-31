@@ -1518,7 +1518,11 @@ def setup_logging(debug: bool = False):
     os.makedirs(LOGS_DIR, exist_ok=True)
 
     level = logging.DEBUG if debug else logging.INFO
-    logging.basicConfig(level=level, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        stream=sys.stdout,
+    )
 
     # Set prawcore and urllib3 to TRACE level for Reddit API debugging when debug is enabled
     if debug:
