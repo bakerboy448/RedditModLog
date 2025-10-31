@@ -32,6 +32,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     xz-utils \
+    procps \
+    htop \
+    vim-tiny \
     && rm -rf /var/lib/apt/lists/*
 
 # Install s6-overlay for proper init and user management
@@ -73,41 +76,37 @@ RUN mkdir -p /config /config/data /config/logs /app /etc/s6-overlay/s6-rc.d/modl
 RUN echo '#!/command/with-contenv bash\n\
 set -e\n\
 \n\
-# Validate critical environment variables\n\
-echo "Validating required environment variables..."\n\
-\n\
-missing_vars=()\n\
-\n\
-[ -z "$REDDIT_CLIENT_ID" ] && missing_vars+=("REDDIT_CLIENT_ID")\n\
-[ -z "$REDDIT_CLIENT_SECRET" ] && missing_vars+=("REDDIT_CLIENT_SECRET")\n\
-[ -z "$REDDIT_USERNAME" ] && missing_vars+=("REDDIT_USERNAME")\n\
-[ -z "$REDDIT_PASSWORD" ] && missing_vars+=("REDDIT_PASSWORD")\n\
-[ -z "$SOURCE_SUBREDDIT" ] && missing_vars+=("SOURCE_SUBREDDIT")\n\
-\n\
-if [ ${#missing_vars[@]} -ne 0 ]; then\n\
-    echo "ERROR: Missing required environment variables:" >&2\n\
-    printf "  - %s\n" "${missing_vars[@]}" >&2\n\
-    echo "" >&2\n\
-    echo "Please set all required environment variables and restart the container." >&2\n\
-    exit 1\n\
+# Validate that we have either config file OR environment variables\n\
+if [ ! -f /config/config.json ]; then\n\
+    echo "No config file found at /config/config.json, checking environment variables..."\n\
+    missing_vars=()\n\
+    [ -z "$REDDIT_CLIENT_ID" ] && missing_vars+=("REDDIT_CLIENT_ID")\n\
+    [ -z "$REDDIT_CLIENT_SECRET" ] && missing_vars+=("REDDIT_CLIENT_SECRET")\n\
+    [ -z "$REDDIT_USERNAME" ] && missing_vars+=("REDDIT_USERNAME")\n\
+    [ -z "$REDDIT_PASSWORD" ] && missing_vars+=("REDDIT_PASSWORD")\n\
+    [ -z "$SOURCE_SUBREDDIT" ] && missing_vars+=("SOURCE_SUBREDDIT")\n\
+    if [ ${#missing_vars[@]} -ne 0 ]; then\n\
+        echo "ERROR: No config file and missing required environment variables:" >&2\n\
+        printf "  - %s\n" "${missing_vars[@]}" >&2\n\
+        echo "" >&2\n\
+        echo "Either mount a config file to /config/config.json OR set environment variables." >&2\n\
+        exit 1\n\
+    fi\n\
+    echo "Using environment variables for configuration"\n\
+else\n\
+    echo "Using config file: /config/config.json"\n\
 fi\n\
-\n\
-echo "All required environment variables are set."\n\
 \n\
 PUID=${PUID:-1000}\n\
 PGID=${PGID:-1000}\n\
-\n\
 echo "Setting UID:GID to ${PUID}:${PGID}"\n\
 \n\
-# Update user and group IDs\n\
 groupmod -o -g "$PGID" modlogbot\n\
 usermod -o -u "$PUID" modlogbot\n\
 \n\
-# Fix ownership\n\
-echo "Fixing ownership of /config and /app"\n\
-chown -R modlogbot:modlogbot /config /app\n\
+echo "Fixing ownership of /config"\n\
+chown -R modlogbot:modlogbot /config\n\
 \n\
-# Ensure data directory has correct permissions\n\
 if [ ! -f /config/data/modlog.db ]; then\n\
     echo "Initializing database directory"\n\
     touch /config/data/modlog.db\n\
@@ -118,14 +117,14 @@ fi' > /etc/s6-overlay/scripts/init-modlogbot-run && \
 # Create s6 service run script
 RUN echo '#!/command/with-contenv bash\n\
 cd /app\n\
-exec s6-setuidgid modlogbot python modlog_wiki_publisher.py --continuous' > /etc/s6-overlay/scripts/modlog-bot-run && \
+exec s6-setuidgid modlogbot python modlog_wiki_publisher.py --config /config/config.json --continuous' > /etc/s6-overlay/scripts/modlog-bot-run && \
     chmod +x /etc/s6-overlay/scripts/modlog-bot-run
 
 # Setup s6 service definitions
 RUN echo 'oneshot' > /etc/s6-overlay/s6-rc.d/init-modlogbot/type && \
     echo '/etc/s6-overlay/scripts/init-modlogbot-run' > /etc/s6-overlay/s6-rc.d/init-modlogbot/up && \
     echo 'longrun' > /etc/s6-overlay/s6-rc.d/modlog-bot/type && \
-    echo '/etc/s6-overlay/scripts/modlog-bot-run' > /etc/s6-overlay/s6-rc.d/modlog-bot/run && \
+    ln -s /etc/s6-overlay/scripts/modlog-bot-run /etc/s6-overlay/s6-rc.d/modlog-bot/run && \
     echo 'init-modlogbot' > /etc/s6-overlay/s6-rc.d/modlog-bot/dependencies && \
     touch /etc/s6-overlay/s6-rc.d/user/contents.d/init-modlogbot && \
     touch /etc/s6-overlay/s6-rc.d/user/contents.d/modlog-bot

@@ -228,52 +228,110 @@ The database includes comprehensive moderation data with full transparency:
 
 ### Quick Start with Docker
 
-```bash
-# Using Docker Compose (recommended)
-docker-compose up -d
+The recommended approach is to use a config file for all settings:
 
-# Using Docker directly
+```bash
+# 1. Create config directory structure
+mkdir -p ./config/data ./config/logs
+
+# 2. Create config.json from template
+cp config_template.json ./config/config.json
+# Edit ./config/config.json with your credentials
+
+# 3. Run with config file (recommended)
 docker run -d \
   --name reddit-modlog \
+  -e PUID=1000 \
+  -e PGID=1000 \
+  -v ./config:/config \
+  ghcr.io/bakerboy448/redditmodlog:latest
+
+# 4. Using Docker Compose (recommended)
+docker compose up -d
+```
+
+**What gets mounted to `/config`:**
+- `config.json` - Your configuration file (auto-updated with new defaults on upgrades)
+- `data/modlog.db` - SQLite database (persistent)
+- `logs/` - Per-subreddit log files
+
+### Alternative: Environment Variables
+
+You can use environment variables instead of a config file:
+
+```bash
+docker run -d \
+  --name reddit-modlog \
+  -e PUID=1000 \
+  -e PGID=1000 \
   -e REDDIT_CLIENT_ID=your_client_id \
   -e REDDIT_CLIENT_SECRET=your_client_secret \
   -e REDDIT_USERNAME=your_username \
   -e REDDIT_PASSWORD=your_password \
   -e SOURCE_SUBREDDIT=yoursubreddit \
-  -e PUID=1000 \
-  -e PGID=1000 \
-  -v ./data:/config/data \
-  -v ./logs:/config/logs \
+  -v ./config:/config \
   ghcr.io/bakerboy448/redditmodlog:latest
 ```
 
-### Docker Environment Variables
+### Docker Compose Example
 
-```env
-# User/Group IDs for file permissions
-PUID=1000
-PGID=1000
+```yaml
+version: '3.8'
 
-# Reddit API credentials (REQUIRED)
-REDDIT_CLIENT_ID=your_client_id
-REDDIT_CLIENT_SECRET=your_client_secret
-REDDIT_USERNAME=your_bot_username
-REDDIT_PASSWORD=your_bot_password
-
-# Application settings
-SOURCE_SUBREDDIT=yoursubreddit
-WIKI_PAGE=modlog
-RETENTION_DAYS=30
-BATCH_SIZE=100
-UPDATE_INTERVAL=300
-ANONYMIZE_MODERATORS=true
+services:
+  redditmodlog-opensignups:
+    image: ghcr.io/bakerboy448/redditmodlog:latest
+    container_name: redditmodlog-opensignups
+    restart: unless-stopped
+    environment:
+      - PUID=1000
+      - PGID=1000
+    volumes:
+      - ./opensignups:/config
+    mem_limit: 256m
+    cpus: 0.5
 ```
+
+### Environment Variables
+
+**User/Group IDs** (for file permissions):
+- `PUID` - User ID (default: 1000)
+- `PGID` - Group ID (default: 1000)
+
+**Reddit API Credentials** (required if not using config file):
+- `REDDIT_CLIENT_ID` - Reddit app client ID
+- `REDDIT_CLIENT_SECRET` - Reddit app client secret
+- `REDDIT_USERNAME` - Bot username
+- `REDDIT_PASSWORD` - Bot password
+- `SOURCE_SUBREDDIT` - Subreddit name
+
+**Optional Settings** (override config.json if set):
+- `WIKI_PAGE` - Wiki page name (default: modlog)
+- `RETENTION_DAYS` - Database retention in days (default: 90, max: 365)
+- `BATCH_SIZE` - Entries per fetch (default: 50, max: 500)
+- `UPDATE_INTERVAL` - Seconds between updates (default: 600, max: 3600)
+- `ANONYMIZE_MODERATORS` - true/false (default: true)
+
+**Internal Paths** (don't modify):
+- `DATABASE_PATH=/config/data/modlog.db`
+- `LOGS_DIR=/config/logs`
 
 ### Docker Image
 
 Pre-built images available at:
 - `ghcr.io/bakerboy448/redditmodlog:latest`
+- `ghcr.io/bakerboy448/redditmodlog:v1.4.x` (specific versions)
 - Multi-architecture: `linux/amd64`, `linux/arm64`
+
+### Docker Features
+
+- ✅ s6-overlay v3 init system for proper process management
+- ✅ PUID/PGID support for file permission management
+- ✅ Automatic config file updates on version upgrades
+- ✅ Single `/config` mount for all persistent data
+- ✅ Supports both config file and environment variable configuration
+- ✅ Built-in troubleshooting tools (htop, vim)
+- ✅ Health checks for monitoring
 
 ## Systemd Service (Production)
 
