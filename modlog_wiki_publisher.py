@@ -1514,15 +1514,30 @@ def create_argument_parser():
 
 
 def setup_logging(debug: bool = False):
-    """Setup logging configuration"""
+    """Setup logging configuration with proper stream routing"""
     os.makedirs(LOGS_DIR, exist_ok=True)
 
     level = logging.DEBUG if debug else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        stream=sys.stdout,
-    )
+
+    # Create formatters
+    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+
+    # Handler for INFO and DEBUG to stdout
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler.setLevel(logging.DEBUG)
+    stdout_handler.setFormatter(formatter)
+    stdout_handler.addFilter(lambda record: record.levelno < logging.WARNING)
+
+    # Handler for WARNING, ERROR, CRITICAL to stderr
+    stderr_handler = logging.StreamHandler(sys.stderr)
+    stderr_handler.setLevel(logging.WARNING)
+    stderr_handler.setFormatter(formatter)
+
+    # Configure root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(level)
+    root_logger.addHandler(stdout_handler)
+    root_logger.addHandler(stderr_handler)
 
     # Set prawcore and urllib3 to TRACE level for Reddit API debugging when debug is enabled
     if debug:
