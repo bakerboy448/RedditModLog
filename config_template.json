@@ -1,23 +1,71 @@
 {
+  "_comment": "Reddit ModLog Wiki Publisher Configuration",
+  "_comment_envars": "All settings can be overridden with environment variables. See README for details.",
+
   "reddit": {
+    "_comment": "Reddit API credentials - Get from https://www.reddit.com/prefs/apps",
     "client_id": "YOUR_CLIENT_ID_HERE",
     "client_secret": "YOUR_CLIENT_SECRET_HERE",
     "username": "YOUR_BOT_USERNAME",
     "password": "YOUR_BOT_PASSWORD"
   },
+
   "source_subreddit": "YourSubreddit",
+  "_comment_source_subreddit": "Subreddit to fetch modlog from and publish wiki to (env: SOURCE_SUBREDDIT)",
+
   "wiki_page": "modlog",
+  "_comment_wiki_page": "Wiki page name to publish to (env: WIKI_PAGE)",
+
   "retention_days": 90,
+  "_comment_retention_days": "Days to keep entries in database (1-365, env: RETENTION_DAYS)",
+
   "batch_size": 50,
+  "_comment_batch_size": "Number of modlog entries to fetch per run (10-500, env: BATCH_SIZE)",
+
   "update_interval": 600,
+  "_comment_update_interval": "Seconds between updates in continuous mode (60-3600, env: UPDATE_INTERVAL)",
+
   "max_wiki_entries_per_page": 1000,
+  "_comment_max_wiki_entries": "Maximum entries to show in wiki (100-2000)",
+
+  "wiki_display_days": 90,
+  "_comment_wiki_display_days": "Days of history to display in wiki (must be <= retention_days)",
+
   "max_continuous_errors": 5,
+  "_comment_max_errors": "Max consecutive errors before stopping (1-50)",
+
   "rate_limit_buffer": 60,
+  "_comment_rate_limit": "Extra seconds to wait after rate limit (30-300)",
+
   "max_batch_retries": 3,
+  "_comment_retries": "Max retries for failed batch fetches (1-10)",
+
   "archive_threshold_days": 7,
+  "_comment_archive": "Days before archiving old entries (1-30, affects database cleanup)",
+
+  "anonymize_moderators": true,
+  "_comment_anonymize": "Replace mod names with AutoModerator/HumanModerator (env: ANONYMIZE_MODERATORS)",
+
   "ignored_moderators": ["AutoModerator"],
+  "_comment_ignored": "Moderator names to exclude from modlog",
+
+  "wiki_actions": [
+    "removelink",
+    "removecomment",
+    "spamlink",
+    "spamcomment",
+    "addremovalreason",
+    "approvelink",
+    "approvecomment"
+  ],
+  "_comment_wiki_actions": "Modlog action types to include in wiki. Remove this field to use defaults.",
+
+  "database_path": "/config/data/modlog.db",
+  "_comment_database": "Path to SQLite database (env: DATABASE_PATH)",
+
   "display_format": {
     "show_full_ids": false,
     "id_format": "prefixed"
-  }
+  },
+  "_comment_display": "Wiki display formatting options"
 }
