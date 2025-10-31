@@ -244,7 +244,7 @@ docker run -d \
   -e PUID=1000 \
   -e PGID=1000 \
   -v ./config:/config \
-  ghcr.io/bakerboy448/redditmodlog:latest
+  ghcr.io/bakerboy448/redditmodlog:1
 
 # 4. Using Docker Compose (recommended)
 docker compose up -d
@@ -270,7 +270,7 @@ docker run -d \
   -e REDDIT_PASSWORD=your_password \
   -e SOURCE_SUBREDDIT=yoursubreddit \
   -v ./config:/config \
-  ghcr.io/bakerboy448/redditmodlog:latest
+  ghcr.io/bakerboy448/redditmodlog:1
 ```
 
 ### Docker Compose Example
@@ -280,7 +280,7 @@ version: '3.8'
 
 services:
   redditmodlog-opensignups:
-    image: ghcr.io/bakerboy448/redditmodlog:latest
+    image: ghcr.io/bakerboy448/redditmodlog:1
     container_name: redditmodlog-opensignups
     restart: unless-stopped
     environment:
@@ -318,10 +318,20 @@ services:
 
 ### Docker Image
 
-Pre-built images available at:
-- `ghcr.io/bakerboy448/redditmodlog:latest`
-- `ghcr.io/bakerboy448/redditmodlog:v1.4.x` (specific versions)
-- Multi-architecture: `linux/amd64`, `linux/arm64`
+Pre-built images available at GitHub Container Registry:
+
+**Recommended Tags:**
+- `ghcr.io/bakerboy448/redditmodlog:1` - Major version (gets v1.x.x updates automatically)
+- `ghcr.io/bakerboy448/redditmodlog:1.4` - Minor version (gets v1.4.x patches only)
+- `ghcr.io/bakerboy448/redditmodlog:1.4.3` - Specific version (pinned, no updates)
+
+**Other Tags:**
+- `ghcr.io/bakerboy448/redditmodlog:latest` - Always latest build (use with caution)
+- `ghcr.io/bakerboy448/redditmodlog:sha-<commit>` - Specific commit SHA
+
+**Architectures:** `linux/amd64`, `linux/arm64`
+
+**Recommendation:** Use `:1` for production to get automatic updates within v1 while avoiding breaking changes from v2.
 
 ### Docker Features
 
@@ -330,8 +340,9 @@ Pre-built images available at:
 - ✅ Automatic config file updates on version upgrades
 - ✅ Single `/config` mount for all persistent data
 - ✅ Supports both config file and environment variable configuration
-- ✅ Built-in troubleshooting tools (htop, vim)
+- ✅ Built-in troubleshooting tools (htop, vim, sqlite3)
 - ✅ Health checks for monitoring
+- ✅ Proper log routing (INFO→stdout, errors→stderr)
 
 ## Systemd Service (Production)
 
