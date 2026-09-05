@@ -1,0 +1,26 @@
+{
+  "private": true,
+  "name": "redditmodlog-devvit",
+  "version": "0.0.1",
+  "license": "BSD-3-Clause",
+  "type": "module",
+  "description": "Publishes a subreddit's moderation log to a wiki page (Reddit Devvit app).",
+  "main": "src/main.ts",
+  "scripts": {
+    "deploy": "devvit upload",
+    "dev": "devvit playtest",
+    "playtest": "devvit playtest",
+    "login": "devvit login",
+    "launch": "devvit publish",
+    "type-check": "tsc --build",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@devvit/public-api": "0.13.5"
+  },
+  "devDependencies": {
+    "devvit": "0.13.5",
+    "typescript": "5.8.3",
+    "vitest": "3.2.4"
+  }
+}

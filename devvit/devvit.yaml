@@ -1,0 +1,12 @@
+# Devvit app manifest (classic @devvit/public-api model).
+#
+# `name` MUST be globally unique across the Reddit Developer Platform and is
+# claimed on first `devvit upload`. If "redditmodlog" is taken, pick a unique
+# variant (e.g. "redditmodlog-wiki") here BEFORE the first upload — renaming a
+# published app is disruptive.
+#
+# Settings, the scheduler job, the menu items, and the triggers are declared in
+# code (src/main.ts via Devvit.addSettings / addSchedulerJob / addMenuItem /
+# addTrigger), not in this file. The CLI infers required permissions (Reddit API,
+# Redis, scheduler) from the registered capabilities at upload time.
+name: redditmodlog

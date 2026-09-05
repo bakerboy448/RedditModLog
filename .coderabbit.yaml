@@ -8,11 +8,33 @@ reviews:
   poem: false
   review_status: true
   collapse_walkthrough: false
+  path_filters:
+    - "!devvit/dist/**"
+    - "!devvit/node_modules/**"
+    - "!**/package-lock.json"
   path_instructions:
     - path: "*.py"
       instructions: |
         Review for security issues — validate all user inputs.
         Check for proper error handling and logging.
+    - path: "devvit/src/**/*.ts"
+      instructions: |
+        Devvit (Reddit Developer Platform) app. Enforce the migration invariants:
+        moderator names must always be anonymized (INV-1, never a real name);
+        only post/comment permalinks may be linked, never user profiles (INV-2);
+        removal-reason text must be email-censored and pipe-escaped (INV-4);
+        wiki content must stay under the 512KB cap (INV-3); the content hash used
+        for skip-if-unchanged must exclude volatile data like the Last Updated
+        timestamp (INV-6); ingest must be idempotent/deduped since there is no
+        daemon (INV-5). Verify Devvit API usage (reddit.getModerationLog,
+        get/updateWikiPage, context.redis, scheduler) and flag any unvalidated
+        // TODO(devvit-api) call. Prefer type-safe, injected clients over globals.
+    - path: "devvit/test/**/*.ts"
+      instructions: |
+        Offline mock-Reddit test harness. Check that the security invariants
+        (anonymize, no profile links, PII strip, dedup, retention, hash-skip)
+        are actually asserted, and that mocks faithfully match the real Devvit
+        API shapes they stand in for.
     - path: ".github/workflows/**"
       instructions: |
         Check for command injection via untrusted GitHub context variables.
